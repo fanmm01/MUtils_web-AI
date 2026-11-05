@@ -1,0 +1,30 @@
+# Runtime data (never commit knowledge bases, indexes, SQLite files or model caches)
+var/
+data/
+models/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node / TypeScript
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

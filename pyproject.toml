@@ -1,0 +1,52 @@
+[project]
+name = "qa-workspace"
+version = "0.0.0"
+description = "Knowledge-base Q&A assistant workspace (P1 scaffold)"
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = [
+    "Contracts",
+    "Q&A_Assistant",
+    "KBManagement",
+    "Infrastructure",
+    "ServiceAPI",
+    "Clients/python",
+    "Clients/cli",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.2,<9",
+    "pytest-asyncio>=0.23,<1",
+    "httpx>=0.27,<1",
+    "ruff>=0.5,<1",
+]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"
+asyncio_mode = "auto"
+filterwarnings = ["error::DeprecationWarning:qa_*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = [
+    "Contracts/src",
+    "Q&A_Assistant/src",
+    "KBManagement/src",
+    "Infrastructure/src",
+    "ServiceAPI/src",
+    "Clients/python/src",
+    "Clients/cli/src",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

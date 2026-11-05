@@ -1,0 +1,16 @@
+{
+  "name": "qa-workspace",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "Clients/typescript",
+    "WebUI",
+    "WebWidget"
+  ],
+  "scripts": {
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present",
+    "test:scaffold": "npm run test:scaffold --workspaces --if-present"
+  }
+}

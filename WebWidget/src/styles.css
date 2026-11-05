@@ -1,0 +1,267 @@
+/* Loaded into the widget's shadow root only; nothing here reaches the host page. */
+:host {
+  all: initial;
+  --qa-accent: #2357c6;
+  --qa-accent-text: #ffffff;
+  --qa-surface: #ffffff;
+  --qa-text: #1d2433;
+  --qa-muted: #5b6475;
+  --qa-border: #d6dbe4;
+  --qa-warn-bg: #fff6e0;
+  --qa-warn-border: #e2b54a;
+  --qa-error-bg: #fdecec;
+  --qa-error-border: #d25b5b;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+.qa-root {
+  font: 14px/1.5 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  color: var(--qa-text);
+}
+
+.qa-launcher {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 2147483000;
+  width: 56px;
+  height: 56px;
+  border: none;
+  border-radius: 50%;
+  background: var(--qa-accent);
+  color: var(--qa-accent-text);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.25);
+}
+
+.qa-root[data-position="bottom-left"] .qa-launcher {
+  right: auto;
+  left: 20px;
+}
+
+.qa-panel {
+  position: fixed;
+  right: 20px;
+  bottom: 88px;
+  z-index: 2147483001;
+  display: flex;
+  flex-direction: column;
+  width: 380px;
+  max-width: calc(100vw - 40px);
+  height: 560px;
+  max-height: calc(100vh - 120px);
+  border: 1px solid var(--qa-border);
+  border-radius: 12px;
+  background: var(--qa-surface);
+  box-shadow: 0 8px 28px rgb(0 0 0 / 0.2);
+  overflow: hidden;
+}
+
+.qa-root[data-position="bottom-left"] .qa-panel {
+  right: auto;
+  left: 20px;
+}
+
+.qa-panel[hidden] {
+  display: none;
+}
+
+.qa-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--qa-border);
+}
+
+.qa-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.qa-badge {
+  padding: 1px 6px;
+  border: 1px solid var(--qa-warn-border);
+  border-radius: 4px;
+  background: var(--qa-warn-bg);
+  font-size: 12px;
+}
+
+.qa-close {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: var(--qa-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.qa-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 12px;
+}
+
+.qa-scope fieldset {
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--qa-border);
+  border-radius: 8px;
+}
+
+.qa-scope legend {
+  padding: 0 4px;
+  font-weight: 600;
+}
+
+.qa-modes,
+.qa-kb-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.qa-note,
+.qa-effective {
+  margin: 4px 0 0;
+  color: var(--qa-muted);
+  font-size: 13px;
+}
+
+.qa-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.qa-message {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #f2f4f8;
+  overflow-wrap: anywhere;
+}
+
+.qa-message-user {
+  align-self: flex-end;
+  background: #e6edfb;
+}
+
+.qa-message-notice {
+  border: 1px solid var(--qa-warn-border);
+  background: var(--qa-warn-bg);
+}
+
+.qa-status:empty {
+  display: none;
+}
+
+.qa-status {
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #f2f4f8;
+  font-size: 13px;
+}
+
+.qa-status[data-kind="error"] {
+  border: 1px solid var(--qa-error-border);
+  background: var(--qa-error-bg);
+}
+
+.qa-status-title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.qa-status-meta {
+  margin: 2px 0 0;
+  color: var(--qa-muted);
+  font-size: 12px;
+}
+
+.qa-composer {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--qa-border);
+}
+
+.qa-input {
+  flex: 1;
+  min-height: 40px;
+  max-height: 120px;
+  padding: 8px;
+  border: 1px solid var(--qa-border);
+  border-radius: 8px;
+  font: inherit;
+  resize: vertical;
+}
+
+.qa-send {
+  padding: 0 14px;
+  border: none;
+  border-radius: 8px;
+  background: var(--qa-accent);
+  color: var(--qa-accent-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.qa-send:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.qa-launcher:focus-visible,
+.qa-close:focus-visible,
+.qa-send:focus-visible,
+.qa-input:focus-visible,
+.qa-scope input:focus-visible {
+  outline: 3px solid #f5a623;
+  outline-offset: 2px;
+}
+
+.qa-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (max-width: 480px) {
+  .qa-panel,
+  .qa-root[data-position="bottom-left"] .qa-panel {
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: 100vw;
+    max-width: 100vw;
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .qa-launcher {
+    transition: transform 0.15s ease;
+  }
+
+  .qa-launcher:hover {
+    transform: scale(1.05);
+  }
+}

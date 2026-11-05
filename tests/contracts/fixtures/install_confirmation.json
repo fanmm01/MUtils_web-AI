@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "method": "POST",
+  "path": "/v1/model-installs",
+  "headers": {"Idempotency-Key": "install-key-1"},
+  "body": {
+    "preview_id": "preview_1",
+    "preview_hash": "sha256:preview",
+    "confirmed": true
+  }
+}

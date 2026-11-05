@@ -1,0 +1,29 @@
+{
+  "name": "@qa/widget",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Embeddable floating Q&A widget. P1 scaffold: layout, lifecycle and placeholder controls only.",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./dist/*": "./dist/*"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "node scripts/run-bin.mjs typescript tsc -p tsconfig.json --noEmit",
+    "build": "node scripts/run-bin.mjs vite vite build && node scripts/run-bin.mjs vite vite build --mode iife"
+  },
+  "dependencies": {
+    "@qa/client": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "vite": "^8.3.6"
+  }
+}

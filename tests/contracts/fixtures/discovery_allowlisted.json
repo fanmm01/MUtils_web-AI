@@ -1,0 +1,6 @@
+{
+  "schema_version": 1,
+  "method": "POST",
+  "path": "/v1/models/discovery",
+  "body": {"target_ids": ["ollama-local"]}
+}

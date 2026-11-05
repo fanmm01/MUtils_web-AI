@@ -1,0 +1,284 @@
+{
+  "answer_event": {
+    "additionalProperties": false,
+    "properties": {
+      "answer_id": {
+        "maxLength": 256,
+        "minLength": 1,
+        "title": "Answer Id",
+        "type": "string"
+      },
+      "binding_id": {
+        "anyOf": [
+          {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Binding Id"
+      },
+      "data": {
+        "additionalProperties": true,
+        "title": "Data",
+        "type": "object"
+      },
+      "event": {
+        "enum": [
+          "answer.accepted",
+          "inference.bound",
+          "selection.resolved",
+          "retrieval.completed",
+          "citation.ready",
+          "answer.delta",
+          "answer.completed",
+          "answer.refused",
+          "answer.failed",
+          "answer.cancelled"
+        ],
+        "title": "Event",
+        "type": "string"
+      },
+      "inference_revision": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Inference Revision"
+      },
+      "schema_version": {
+        "default": 1,
+        "title": "Schema Version",
+        "type": "integer"
+      },
+      "scope_id": {
+        "anyOf": [
+          {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Scope Id"
+      },
+      "scope_revision": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Scope Revision"
+      },
+      "seq": {
+        "minimum": 1,
+        "title": "Seq",
+        "type": "integer"
+      },
+      "session_id": {
+        "maxLength": 256,
+        "minLength": 1,
+        "title": "Session Id",
+        "type": "string"
+      },
+      "timestamp": {
+        "format": "date-time",
+        "title": "Timestamp",
+        "type": "string"
+      }
+    },
+    "required": [
+      "answer_id",
+      "session_id",
+      "seq",
+      "event"
+    ],
+    "title": "AnswerEvent",
+    "type": "object"
+  },
+  "answer_events": {
+    "ids": "answer_id and session_id on every event",
+    "replay": "Last-Event-ID maps to seq; duplicates are dropped by the client",
+    "single_terminal": true,
+    "terminal": [
+      "answer.completed",
+      "answer.refused",
+      "answer.failed",
+      "answer.cancelled"
+    ]
+  },
+  "error_codes": {
+    "CONFLICT": 409,
+    "EVIDENCE_INSUFFICIENT": 200,
+    "FEATURE_NOT_IMPLEMENTED": 501,
+    "GONE": 410,
+    "INFERENCE_POLICY_VIOLATION": 403,
+    "INTERNAL_ERROR": 500,
+    "MODEL_CAPABILITY_MISSING": 503,
+    "MODEL_CHANGED": 409,
+    "MODEL_UNAVAILABLE": 503,
+    "NOT_FOUND": 404,
+    "PERMISSION_DENIED": 403,
+    "PROVIDER_UNAVAILABLE": 503,
+    "RATE_LIMITED": 429,
+    "UNAUTHENTICATED": 401,
+    "VALIDATION_FAILED": 422
+  },
+  "event_types": {
+    "answer": [
+      "answer.accepted",
+      "inference.bound",
+      "selection.resolved",
+      "retrieval.completed",
+      "citation.ready",
+      "answer.delta",
+      "answer.completed",
+      "answer.refused",
+      "answer.failed",
+      "answer.cancelled"
+    ],
+    "job": [
+      "job.accepted",
+      "job.progress",
+      "job.completed",
+      "job.failed",
+      "job.cancelled"
+    ]
+  },
+  "job_event": {
+    "$defs": {
+      "JobEventType": {
+        "enum": [
+          "job.accepted",
+          "job.progress",
+          "job.completed",
+          "job.failed",
+          "job.cancelled"
+        ],
+        "title": "JobEventType",
+        "type": "string"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "bytes_downloaded": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Bytes Downloaded"
+      },
+      "diagnostic": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Diagnostic"
+      },
+      "event": {
+        "$ref": "#/$defs/JobEventType"
+      },
+      "job_id": {
+        "maxLength": 256,
+        "minLength": 1,
+        "title": "Job Id",
+        "type": "string"
+      },
+      "phase": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Phase"
+      },
+      "progress": {
+        "anyOf": [
+          {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Progress"
+      },
+      "schema_version": {
+        "default": 1,
+        "title": "Schema Version",
+        "type": "integer"
+      },
+      "seq": {
+        "minimum": 1,
+        "title": "Seq",
+        "type": "integer"
+      },
+      "timestamp": {
+        "format": "date-time",
+        "title": "Timestamp",
+        "type": "string"
+      },
+      "total_bytes": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Total Bytes"
+      }
+    },
+    "required": [
+      "job_id",
+      "seq",
+      "event"
+    ],
+    "title": "JobEvent",
+    "type": "object"
+  },
+  "job_events": {
+    "bytes_unknown": "total_bytes may be null; no percentage is invented",
+    "ids": "job_id on every event; never fabricates an answer_id"
+  },
+  "schema_version": 1
+}

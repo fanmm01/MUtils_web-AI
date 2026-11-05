@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "method": "POST",
+  "path": "/v1/search",
+  "body": {
+    "question": "如何修改配置？",
+    "selection": {"mode": "explicit", "targets": [{"kb_id": "kb_product"}]},
+    "top_k": 10
+  }
+}

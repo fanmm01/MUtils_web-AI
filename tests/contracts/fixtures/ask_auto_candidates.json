@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "method": "POST",
+  "path": "/v1/ask",
+  "body": {
+    "question": "升级失败如何回滚？",
+    "selection": {
+      "mode": "auto",
+      "candidate_kb_ids": ["kb_product", "kb_ops", "kb_faq"],
+      "max_kbs": 2
+    },
+    "inference": {"profile_id": null, "policy": "local_only"}
+  }
+}

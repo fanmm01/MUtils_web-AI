@@ -1,0 +1,16 @@
+[project]
+name = "qa-assistant"
+version = "0.0.0"
+description = "Transport-agnostic Q&A and retrieval core scaffold"
+requires-python = ">=3.12,<3.13"
+dependencies = ["qa-contracts"]
+
+[tool.uv.sources]
+qa-contracts = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/qa_assistant"]

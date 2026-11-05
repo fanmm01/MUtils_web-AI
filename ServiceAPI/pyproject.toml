@@ -1,0 +1,30 @@
+[project]
+name = "qa-service"
+version = "0.0.0"
+description = "FastAPI application, sessions, jobs, feedback and model management"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "qa-contracts",
+    "qa-assistant",
+    "qa-kb-management",
+    "qa-infrastructure",
+    "fastapi>=0.111,<1",
+    "uvicorn>=0.30,<1",
+]
+
+[project.scripts]
+qa-api = "qa_service.__main__:main"
+qa-worker = "qa_service.worker:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/qa_service"]
+
+[tool.uv.sources]
+qa-contracts = { workspace = true }
+qa-assistant = { workspace = true }
+qa-kb-management = { workspace = true }
+qa-infrastructure = { workspace = true }
