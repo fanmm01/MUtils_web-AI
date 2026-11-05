@@ -16,7 +16,7 @@
 | [Clients/python/](Clients/python/) | 薄 Python HTTP/SSE SDK | 已实现传输与错误映射 |
 | [Clients/cli/](Clients/cli/) | Typer CLI（`qa`） | 已实现命令与参数校验 |
 | [Clients/typescript/](Clients/typescript/) | 共享 TypeScript HTTP/SSE 传输层（`@qa/client`） | 已实现，供 P1-B 消费 |
-| WebUI/、WebWidget/ | 浏览器管理端与网页插件 | P1-B，未开始 |
+| [WebUI/](WebUI/)、[WebWidget/](WebWidget/) | 浏览器管理端与网页插件 | P1-B 布局、导航与插件生命周期已完成；业务操作如实显示服务端 501 |
 | [docs/](docs/) | 架构、API、验收、开发、模型说明；生成契约 | 见各文件 |
 | [scripts/](scripts/) | 契约导出、环境检查、分发检查、开发启动 | 已实现 |
 

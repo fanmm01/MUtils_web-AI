@@ -91,7 +91,7 @@ export class WidgetController {
   }
 
   getSelection(): RetrievalSelection {
-    return structuredClone(this.state.selection);
+    return copySelection(this.state.selection);
   }
 
   async send(text: string): Promise<void> {
@@ -212,6 +212,16 @@ function toCatalogItems(items: unknown): CatalogItem[] {
     }
   }
   return result;
+}
+
+/** Plain copy; avoids structuredClone, which older host pages may lack. */
+function copySelection(selection: RetrievalSelection): RetrievalSelection {
+  if (selection.mode === "explicit") {
+    return { mode: "explicit", targets: selection.targets.map((target) => ({ ...target })) };
+  }
+  const copy: RetrievalSelection = { ...selection };
+  if (selection.candidate_kb_ids) copy.candidate_kb_ids = [...selection.candidate_kb_ids];
+  return copy;
 }
 
 function newIdempotencyKey(): string {

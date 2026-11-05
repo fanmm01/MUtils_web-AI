@@ -1,0 +1,25 @@
+{
+  "name": "@qa/webui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Knowledge-base admin web UI. P1 scaffold: layout, navigation and not-implemented states only.",
+  "scripts": {
+    "dev": "node scripts/run-bin.mjs vite vite",
+    "build": "node scripts/run-bin.mjs vite vite build",
+    "preview": "node scripts/run-bin.mjs vite vite preview",
+    "typecheck": "node scripts/run-bin.mjs typescript tsc -p tsconfig.json --noEmit && node scripts/run-bin.mjs typescript tsc -p ../tests/frontend/tsconfig.json --noEmit",
+    "test:scaffold": "node scripts/run-bin.mjs vitest vitest run --config ../tests/frontend/vitest.config.ts"
+  },
+  "dependencies": {
+    "@qa/client": "*",
+    "@qa/widget": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "jsdom": "^30.1.3",
+    "typescript": "^5.6.0",
+    "vite": "^8.3.6",
+    "vitest": "^5.1.0"
+  }
+}

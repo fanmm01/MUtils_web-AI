@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node", "vite/client"],
+    "paths": {
+      "@qa/client": ["../../Clients/typescript/src/index.ts"]
+    }
+  },
+  "include": ["*.ts"]
+}

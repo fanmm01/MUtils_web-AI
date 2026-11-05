@@ -9,7 +9,7 @@
 | 1 | 207 / 225 / 249 | CLI、网页均能建库，本地/上传目录全部或部分导入，多格式解析 | 路由、DTO、CLI 命令与解析器能力声明已就位；有效请求 501 | P2 |
 | 2 | 209 / 227 / 255 | 内容增删改查完整，更新不破坏其他资料 | 路由与 DTO 已冻结；501 | P2 |
 | 3 | 211 / 229 / 261 | 源文档增量同步，直接录入问答对 | 路由、来源清单与 QA DTO 已冻结；501 | P2 |
-| 4 | 213 / 231 / 267 | 任意网站便捷嵌入，悬浮图标与弹窗，多轮上下文 | 仅共享 TS 传输层；WebWidget 页面属 P1-B（未开始） | P1-B / P3 |
+| 4 | 213 / 231 / 267 | 任意网站便捷嵌入，悬浮图标与弹窗，多轮上下文 | WebWidget 悬浮图标、弹窗、生命周期、选库与推理占位控件已完成（P1-B）；提问得到 501 | P3 / P4 |
 | 5 | 215 / 233 / 273 | 有据回答、引用详情、证据不足友好拒答 | 引用/证据 DTO 与错误码已冻结；回答为 501 | P3 |
 | 6 | 217 / 235 / 279 | 检索改进有效、语义异写可召回、真实流式输出 | SSE 事件 schema 与终态规则已冻结；流式端点预检即 501 | P3 / P4 |
 | 7 | 219 / 237 / 285 | 认可/不认可反馈，未回答问题可用于补库 | 反馈 DTO 与路由已冻结；501 | P3 |
@@ -41,15 +41,19 @@
 | 环境报告 | `python scripts/check_environment.py` | 输出 JSON；仅查 PATH，未启动服务、未探测模型 |
 | 分发检查 | `python scripts/check_distribution.py --check` | 扫描 Git 追踪文件与源码树，未发现权重（启发式） |
 | 工程脚本 | `pytest tests/scaffold/test_scripts.py` | 通过：只读、不探测、不联网，权重标记与跳过依赖目录正确 |
+| 前端类型检查与构建 | `npm ci`、`npm run typecheck`、`npm run build` | 退出码 0：`@qa/client`、`@qa/webui`、`@qa/widget` 三个工作区 |
+| 前端框架测试 | `npm run test:scaffold` | `@qa/client` 1 项通过；`tests/frontend/scaffold.spec.ts` 9 项通过：导航含模型页、模型页不检测不伪造、插件打开/关闭/销毁、选库与推理控件保持占位、各页“尚未实现”、无假成功或假回答，以及 3 项源码/产物静态检查 |
 
 全套 Python 测试：`150 passed`（`tests/scaffold` + `tests/contracts`），1 条 Starlette 弃用警告。
 
 启动冒烟（真实进程，临时数据目录）：`qa-api --port 8765` → `/healthz` 200 `{"status":"ok","mode":"scaffold","schema_version":1}`、`/readyz` 503、`GET /v1/kbs` 501、`POST /v1/search {}` 422（`field=question`）；运行后临时数据目录未被创建。
 
+前端冒烟（真实进程）：`qa-api` 与 WebUI 开发服务器（`npm run dev -w @qa/webui`，127.0.0.1:5173）同时运行，经开发服务器代理访问 `/healthz` 200、`/readyz` 503、两个 capabilities 接口 200，`/v1/kbs`、`/v1/knowledge-catalog`、`/v1/issues`、`/v1/models/runtimes`、`POST /v1/sessions` 均为 501。构建出的 `qa-widget.iife.js` 在 jsdom 中按 data 属性只挂载一次，样式只在 Shadow DOM 内，销毁后移除节点。
+
 ## 3. 未验证与延期项
 
 - P1-A2（问答核心语义）由另一并行会话负责，本记录不包含其结果。
-- P1-B（WebUI/WebWidget）按用户安排暂停，未创建页面；对应的四项前端验收未执行。
+- P1-B（WebUI/WebWidget）只在 jsdom 中测试，未在真实浏览器中手动点测；`test:e2e`（Playwright）随 P3/P4 的插件与管理端用例建立。
 - 真实语料、多格式解析、OCR、数据库、任务队列、模型发现/安装/推理、检索质量与延迟：全部未执行，不得引用为通过。
 - 本轮未访问 Ollama/LM Studio 官方文档（网络校验未通过），适配器协议与取消语义仍是待核验契约；本机只读观察到 0.17.5 与两个已下载模型，未加载、未验证角色。
 - Agent Insight：延期，验收材料缺失。
