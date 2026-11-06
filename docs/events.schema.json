@@ -57,6 +57,7 @@
         "title": "Inference Revision"
       },
       "schema_version": {
+        "const": 1,
         "default": 1,
         "title": "Schema Version",
         "type": "integer"
@@ -163,6 +164,7 @@
       "job.cancelled"
     ]
   },
+  "http_schema_version": 2,
   "job_event": {
     "$defs": {
       "JobEventType": {
@@ -240,6 +242,7 @@
         "title": "Progress"
       },
       "schema_version": {
+        "const": 1,
         "default": 1,
         "title": "Schema Version",
         "type": "integer"

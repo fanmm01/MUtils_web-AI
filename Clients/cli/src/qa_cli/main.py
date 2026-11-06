@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
 from typing import Annotated, Any
 
 import typer
 
 from qa_client import Client, QAError
+from qa_client.files import upload_directory
 from qa_contracts.errors import ErrorCode
 
 app = typer.Typer(add_completion=False, help="Knowledge-base Q&A assistant client.")
@@ -184,6 +186,75 @@ def content_import(
     )
 
 
+@kb_app.command("publish")
+def kb_publish(
+    ctx: typer.Context,
+    version_id: str,
+    expected_active: Annotated[str | None, typer.Option("--expected-active")] = None,
+) -> None:
+    _emit(
+        ctx,
+        _client(ctx).publish_version(
+            version_id, {"expected_active_version_id": expected_active}
+        ),
+    )
+
+
+@kb_app.command("versions")
+def kb_versions(ctx: typer.Context, kb_id: str) -> None:
+    _emit(ctx, _client(ctx).list_versions(kb_id))
+
+
+@kb_app.command("rollback")
+def kb_rollback(
+    ctx: typer.Context,
+    kb_id: str,
+    target: Annotated[str, typer.Option("--target")],
+    expected_active: Annotated[str | None, typer.Option("--expected-active")] = None,
+) -> None:
+    _emit(
+        ctx,
+        _client(ctx).rollback(
+            kb_id,
+            {"target_version_id": target, "expected_active_version_id": expected_active},
+        ),
+    )
+
+
+@kb_app.command("sources")
+def kb_sources(ctx: typer.Context, kb_id: str) -> None:
+    _emit(ctx, _client(ctx).list_sources(kb_id))
+
+
+@kb_app.command("source-roots")
+def kb_source_roots(ctx: typer.Context) -> None:
+    _emit(ctx, _client(ctx).list_roots())
+
+
+@kb_app.command("scan-root")
+def kb_scan_root(ctx: typer.Context, root_id: str) -> None:
+    _emit(ctx, _client(ctx).scan_root(root_id))
+
+
+@content_app.command("upload-dir")
+def content_upload_dir(
+    ctx: typer.Context,
+    kb_id: Annotated[str, typer.Option("--kb")],
+    source_id: Annotated[str, typer.Option("--source")],
+    root: Annotated[str, typer.Option("--root", help="local directory to upload")],
+    path: Annotated[list[str] | None, typer.Option("--path", help="relative file only")] = None,
+) -> None:
+    """Upload a client-local directory; the server re-validates every byte."""
+    client = _client(ctx)
+    selection = {"relative_paths": list(path)} if path else {}
+    _emit(
+        ctx,
+        upload_directory(
+            client, Path(root), selection, source_id=source_id, kb_id=kb_id
+        ),
+    )
+
+
 # -- Q&A ------------------------------------------------------------------
 @app.command("search")
 def search(
@@ -347,8 +418,8 @@ def models_install_confirm(
     ctx: typer.Context,
     preview_id: Annotated[str, typer.Option("--preview-id")],
     preview_hash: Annotated[str, typer.Option("--preview-hash")],
+    key: Annotated[str, typer.Option("--idempotency-key")],
     yes: Annotated[bool, typer.Option("--yes", help="explicit confirmation")] = False,
-    key: Annotated[str | None, typer.Option("--idempotency-key")] = None,
 ) -> None:
     # Non-interactive callers must pass --yes; nothing is confirmed implicitly.
     if not yes:
@@ -367,8 +438,9 @@ def models_verify(
     ctx: typer.Context,
     model_id: str,
     role: Annotated[list[str], typer.Option("--role")],
+    key: Annotated[str, typer.Option("--idempotency-key")],
 ) -> None:
-    _emit(ctx, _client(ctx).verify_model(model_id, {"roles": role}))
+    _emit(ctx, _client(ctx).verify_model(model_id, {"roles": role}, idempotency_key=key))
 
 
 # -- jobs -----------------------------------------------------------------
@@ -380,7 +452,7 @@ def jobs_get(ctx: typer.Context, job_id: str) -> None:
 @jobs_app.command("events")
 def jobs_events(ctx: typer.Context, job_id: str) -> None:
     for event in _client(ctx).job_events(job_id):
-        typer.echo(json.dumps({"id": event.id, "event": event.event, "data": event.data}))
+        typer.echo(json.dumps(event, ensure_ascii=False))
 
 
 @jobs_app.command("cancel")

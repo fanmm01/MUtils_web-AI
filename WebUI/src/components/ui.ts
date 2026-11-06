@@ -36,6 +36,16 @@ export function pageHeader(title: string, notice: string): HTMLElement {
   );
 }
 
+/** Header of a page whose operations are implemented: no not-implemented banner. */
+export function pageIntro(title: string, intro: string): HTMLElement {
+  return h(
+    "header",
+    { class: "page-header" },
+    h("h1", { tabindex: "-1" }, title),
+    h("p", { class: "intro" }, intro),
+  );
+}
+
 export function section(title: string, ...children: Child[]): HTMLElement {
   return h("section", { class: "section" }, h("h2", {}, title), ...children);
 }
@@ -71,6 +81,9 @@ export interface ErrorView {
   message: string;
   code?: string;
   requestId?: string;
+  status?: number;
+  /** Field-level reasons from the error envelope, e.g. "kb_id：must match the URL". */
+  details: string[];
   notImplemented: boolean;
 }
 
@@ -83,6 +96,7 @@ const TITLE_BY_STATUS: Record<number, string> = {
   410: "资源已清理",
   422: "参数错误",
   429: "请求过于频繁",
+  500: "服务内部错误",
   503: "依赖服务不可用",
 };
 
@@ -94,25 +108,49 @@ export function describeError(error: unknown): ErrorView {
       title: notImplemented ? "尚未实现" : (TITLE_BY_STATUS[error.status] ?? "请求失败"),
       message: notImplemented ? `服务端尚未实现该功能（${error.message}）。` : error.message,
       code: error.code,
+      status: error.status,
+      details: error.details.map((item) => (item.field ? `${item.field}：${item.reason}` : item.reason)),
       notImplemented,
     };
     if (error.requestId) view.requestId = error.requestId;
     return view;
   }
-  if (error instanceof DOMException && error.name === "AbortError") {
-    return { title: "请求已中止", message: "请求超时或已被取消。", notImplemented: false };
+  if (isAbort(error)) {
+    return { title: "请求已中止", message: "请求超时或已被取消。", details: [], notImplemented: false };
   }
   if (error instanceof TypeError) {
-    return { title: "无法连接问答服务", message: error.message, notImplemented: false };
+    return { title: "无法连接问答服务", message: error.message, details: [], notImplemented: false };
   }
-  return { title: "请求失败", message: String(error), notImplemented: false };
+  const message = error instanceof Error ? error.message : String(error);
+  return { title: "请求失败", message, details: [], notImplemented: false };
+}
+
+/** An aborted request (page left or timeout); also matches cross-realm DOMExceptions. */
+export function isAbort(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { name?: unknown }).name === "AbortError"
+  );
+}
+
+export function isConflict(error: unknown): boolean {
+  return error instanceof QAError && error.status === 409;
+}
+
+export function isNotFound(error: unknown): boolean {
+  return error instanceof QAError && error.status === 404;
 }
 
 export interface StatusArea {
   element: HTMLElement;
   pending(text: string): void;
-  done(text: string): void;
-  fail(label: string, error: ErrorView): void;
+  /** Neutral information (what happened, what is still pending). */
+  done(text: string, ...extra: Child[]): void;
+  /** A server-confirmed change such as 已创建/已发布. */
+  ok(text: string, ...extra: Child[]): void;
+  fail(label: string, error: ErrorView, ...extra: Child[]): void;
+  clear(): void;
 }
 
 export function createStatusArea(): StatusArea {
@@ -121,11 +159,14 @@ export function createStatusArea(): StatusArea {
     element.dataset.kind = kind;
     element.replaceChildren(...present(children));
   };
+  const withExtra = (text: string, extra: Child[]): Child[] =>
+    extra.length === 0 ? [text] : [h("p", {}, text), ...extra];
   return {
     element,
     pending: (text) => set("pending", text),
-    done: (text) => set("info", text),
-    fail: (label, error) => {
+    done: (text, ...extra) => set("info", ...withExtra(text, extra)),
+    ok: (text, ...extra) => set("ok", ...withExtra(text, extra)),
+    fail: (label, error, ...extra) => {
       const meta = [error.code, error.requestId && `request_id: ${error.requestId}`]
         .filter(Boolean)
         .join(" · ");
@@ -133,10 +174,40 @@ export function createStatusArea(): StatusArea {
         "error",
         h("p", { class: "status-title" }, `${label}：${error.title}`),
         h("p", {}, error.message),
+        error.details.length > 0 &&
+          h("ul", { class: "status-details" }, ...error.details.map((item) => h("li", {}, item))),
         meta && h("p", { class: "status-meta" }, meta),
+        ...extra,
       );
     },
+    clear: () => {
+      delete element.dataset.kind;
+      element.replaceChildren();
+    },
   };
+}
+
+export type Outcome<T> = { ok: true; value: T } | { ok: false; error: unknown };
+
+/**
+ * Run one SDK call for a page: show progress, report a failure with the
+ * server's code and request id, and hand the typed result back. A timeout is
+ * an abort too, so aborts are reported like any other failure.
+ */
+export async function attempt<T>(
+  status: StatusArea,
+  label: string,
+  action: () => Promise<T>,
+): Promise<Outcome<T>> {
+  status.pending(`${label}：请求中…`);
+  try {
+    const value = await action();
+    status.clear();
+    return { ok: true, value };
+  } catch (error) {
+    status.fail(label, describeError(error));
+    return { ok: false, error };
+  }
 }
 
 /**

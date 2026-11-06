@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import AwareDatetime, Field
 
-from .base import ID, ContractModel, utc_now
+from .base import HTTP_SCHEMA_VERSION, ID, ContractModel, utc_now
 from .models import InferencePolicy
 
 
@@ -58,6 +58,7 @@ class Job(ContractModel):
     revision: int = Field(ge=0)
     idempotency_key: str | None = None
     lease_until: AwareDatetime | None = None
+    worker_id: ID | None = None
     result_version_id: ID | None = None
     diagnostics: list[JobFileDiagnostic] = Field(default_factory=list)
     error_code: str | None = None
@@ -127,7 +128,7 @@ class WidgetTicket(ContractModel):
 
 class Capabilities(ContractModel):
     mode: Literal["scaffold", "operational"] = "scaffold"
-    schema_version: int = 1
+    schema_version: int = HTTP_SCHEMA_VERSION
     implemented: list[str] = Field(default_factory=list)
     unimplemented: list[str] = Field(default_factory=list)
     selection_limits: dict[str, int] = Field(default_factory=dict)
@@ -142,7 +143,7 @@ class JobEventType(StrEnum):
 
 
 class JobEvent(ContractModel):
-    schema_version: int = 1
+    schema_version: Literal[1] = 1
     job_id: ID
     seq: int = Field(ge=1)
     timestamp: AwareDatetime = Field(default_factory=utc_now)

@@ -29,7 +29,6 @@ from .routes import (
     selection,
     sources,
     system,
-    versions,
 )
 from .settings import Settings, load_settings
 
@@ -39,7 +38,6 @@ ROUTE_MODULES = (
     content,
     imports,
     sources,
-    versions,
     answers,
     selection,
     feedback,
@@ -72,7 +70,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             allow_origins=resolved.allowed_origins,
             allow_credentials=False,
             allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE"],
-            allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
+            allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "Last-Event-ID"],
             expose_headers=[REQUEST_ID_HEADER],
         )
 

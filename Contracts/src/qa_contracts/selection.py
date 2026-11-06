@@ -17,6 +17,13 @@ class KBTarget(ContractModel):
     version_id: ID | None = None
 
 
+class PinnedKBTarget(ContractModel):
+    """An authorized KB resolved to its immutable version before retrieval."""
+
+    kb_id: ID
+    version_id: ID
+
+
 class ExplicitSelection(ContractModel):
     mode: Literal["explicit"] = "explicit"
     targets: Annotated[list[KBTarget], Field(min_length=1)]
@@ -115,7 +122,7 @@ class PreparedSelection(ContractModel):
     requested: RetrievalSelection
     candidates: list[KBDescriptor] = Field(default_factory=list)
     ranked: list[RankedKB] = Field(default_factory=list)
-    pinned_targets: list[KBTarget] = Field(default_factory=list)
+    pinned_targets: list[PinnedKBTarget] = Field(default_factory=list)
     prepared_at: AwareDatetime = Field(default_factory=utc_now)
 
 
@@ -128,15 +135,33 @@ class SelectionStatus(StrEnum):
 class SelectionResult(ContractModel):
     status: SelectionStatus
     mode: Literal["explicit", "auto"]
-    targets: list[KBTarget] = Field(default_factory=list)
+    targets: list[PinnedKBTarget] = Field(default_factory=list)
     reason: str = ""
-    policy_version: str = "p1-scaffold"
+    policy_version: str = "p2-keyword"
+
+    @model_validator(mode="after")
+    def _targets_match_status(self) -> SelectionResult:
+        if self.status == SelectionStatus.RESOLVED and not self.targets:
+            raise ValueError("resolved selection requires pinned targets")
+        if self.status != SelectionStatus.RESOLVED and self.targets:
+            raise ValueError("unresolved selection cannot include targets")
+        ids = [target.kb_id for target in self.targets]
+        if len(ids) != len(set(ids)):
+            raise ValueError("selected knowledge bases must be unique")
+        return self
 
 
 class ResolvedScope(ContractModel):
     scope_id: ID
-    targets: list[KBTarget] = Field(default_factory=list)
+    targets: Annotated[list[PinnedKBTarget], Field(min_length=1)]
     resolved_at: AwareDatetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def _unique_kb(self) -> ResolvedScope:
+        kb_ids = [target.kb_id for target in self.targets]
+        if len(set(kb_ids)) != len(kb_ids):
+            raise ValueError("resolved scope may include a knowledge base only once")
+        return self
 
 
 class EffectiveSelection(ContractModel):

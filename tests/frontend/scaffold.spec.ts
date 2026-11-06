@@ -19,7 +19,7 @@ if (!REPO) throw new Error("QA_REPO_ROOT is set by tests/frontend/vitest.config.
 
 const CAPABILITIES = {
   mode: "scaffold",
-  schema_version: 1,
+  schema_version: 2,
   implemented: ["health", "readiness", "capabilities"],
   unimplemented: ["knowledge", "content", "imports", "sources", "versions", "search", "ask",
     "sessions", "feedback", "selection", "models", "jobs", "widget"],
@@ -201,6 +201,26 @@ test("testWidgetOpenCloseDestroy", () => {
   }).not.toThrow();
 });
 
+test("testWidgetDestroyPreventsFetchAfterDeferredCredential", async () => {
+  let release!: (value: string) => void;
+  const credential = new Promise<string>((resolve) => { release = resolve; });
+  const fetchImpl = vi.fn(async () => json(501, {
+    error: { code: "FEATURE_NOT_IMPLEMENTED", message: "not yet", details: [] },
+    request_id: "req-destroy",
+  }));
+  const handle = mountWidget({
+    client: createClient({ baseUrl: API, getCredential: () => credential, fetch: fetchImpl }),
+  });
+  widgets.push(handle);
+  handle.open();
+  handle.destroy();
+  release("ticket");
+  await vi.waitFor(() => expect(document.querySelector("qa-widget")).toBeNull());
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(fetchImpl).not.toHaveBeenCalled();
+});
+
 test("testSelectionAndInferenceControlsRemainScaffold", async () => {
   const { handle, shadow, calls } = mountTestWidget();
   handle.open();
@@ -226,13 +246,20 @@ test("testSelectionAndInferenceControlsRemainScaffold", async () => {
 
   expect(calls.map((call) => `${call.method} ${call.path}`)).toEqual(["GET /v1/knowledge-catalog"]);
 });
-test("testVisibleNotImplementedState", () => {
+/** Pages whose operations P2 implements: no banner, real server answers instead. */
+const P2_PAGES = new Set(["knowledge", "imports", "content", "versions"]);
+
+test("testVisibleNotImplementedState", async () => {
   const { root } = mountAdmin();
   for (const route of ROUTES) {
     navigate(route.id);
     expect(textOf(root, "main h1")).toBe(route.label);
-    expect(textOf(root, "main .banner")).toContain("尚未实现");
+    if (P2_PAGES.has(route.id)) expect(root.querySelector("main .banner")).toBeNull();
+    else expect(textOf(root, "main .banner")).toContain("尚未实现");
   }
+  // Against the scaffold server a P2 page reports the 501 instead of showing data.
+  navigate("knowledge");
+  await vi.waitFor(() => expect(textOf(root, "main tbody")).toContain("加载失败：尚未实现"));
   // The 试问 page mounts the real widget and removes it when the page is left.
   navigate("qa");
   expect(document.querySelectorAll("qa-widget")).toHaveLength(1);
@@ -309,6 +336,18 @@ test("static: front-end source has no storage, injection, local probing or fixtu
     );
   });
   expect(violations).toEqual([]);
+});
+
+test("static: the widget package exports distributable files", () => {
+  const manifest = JSON.parse(readFileSync(join(REPO, "WebWidget/package.json"), "utf8"));
+  expect(manifest.exports["."]).toEqual({
+    types: "./dist/types/WebWidget/src/index.d.ts",
+    import: "./dist/qa-widget.js",
+  });
+  const built = join(REPO, "WebWidget/dist/qa-widget.js");
+  if (existsSync(built)) {
+    expect(existsSync(join(REPO, "WebWidget/dist/types/WebWidget/src/index.d.ts"))).toBe(true);
+  }
 });
 
 test("static: the widget never imports admin UI code", () => {

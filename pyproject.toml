@@ -29,7 +29,7 @@ dev = [
 
 [tool.pytest.ini_options]
 minversion = "8.0"
-testpaths = ["tests"]
+testpaths = ["tests", "Q&A_Assistant/tests"]
 pythonpath = ["."]
 addopts = "-ra"
 asyncio_mode = "auto"

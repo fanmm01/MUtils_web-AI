@@ -1,6 +1,6 @@
 # 问答小助手（知识库问答插件）
 
-课程任务三的实现仓库。当前处于 **P1 框架阶段**：平台、契约、路由、SDK/CLI 与前端传输层已建立，业务行为尚未实现，所有业务端点诚实返回 `501 FEATURE_NOT_IMPLEMENTED`。
+课程任务三的实现仓库。P1 框架已复核；当前还完成了 **P2 Contract Gate** 的接口冻结，但 P2 业务尚未实现。平台、契约、路由、SDK/CLI 与前端传输层已建立，有效业务请求仍诚实返回 `501 FEATURE_NOT_IMPLEMENTED`。阶段审查与 P2 分工见 [docs/P1阶段复核与P2分工计划.md](docs/P1阶段复核与P2分工计划.md)。
 
 实施计划见 [Q&A_Assistant/plan-q-a-kbmanagement-exe-go-sharded-umbrella.md](Q&A_Assistant/plan-q-a-kbmanagement-exe-go-sharded-umbrella.md)，课程原始要求见 [docs/course/课程任务.md](docs/course/课程任务.md)。
 
@@ -8,7 +8,7 @@
 
 | 目录 | 职责 | P1 状态 |
 | --- | --- | --- |
-| [Contracts/](Contracts/) | 共享 DTO、错误码、Protocol、SSE/事件定义；不依赖 FastAPI、数据库或模型 SDK | 冻结基线（`schema_version = 1`） |
+| [Contracts/](Contracts/) | 共享 DTO、错误码、Protocol、SSE/事件定义；不依赖 FastAPI、数据库或模型 SDK | P2 HTTP 契约 v2；SSE 事件仍为 v1 |
 | [Q&A_Assistant/](Q&A_Assistant/) | 问答核心：选库、检索融合、上下文、证据、生成、模型绑定 | A2 占位，调用即 `FeatureNotImplemented` |
 | [KBManagement/](KBManagement/) | 知识库、内容、导入、来源、版本、解析 | 占位；解析器只声明能力，不读取文件 |
 | [Infrastructure/](Infrastructure/) | SQLite/文件存储、索引、Ollama 适配器等具体实现 | 占位；构造不建库、不联网 |
@@ -52,7 +52,7 @@ uv run python scripts/check_environment.py
 
 ```bash
 curl -s http://127.0.0.1:8000/healthz
-# {"status":"ok","mode":"scaffold","schema_version":1}
+# {"status":"ok","mode":"scaffold","schema_version":2}
 
 curl -s -X POST http://127.0.0.1:8000/v1/search \
   -H 'Content-Type: application/json' \

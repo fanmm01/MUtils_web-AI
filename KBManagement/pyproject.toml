@@ -3,7 +3,13 @@ name = "qa-kb-management"
 version = "0.0.0"
 description = "Knowledge-base lifecycle, content, imports, parsing and versions"
 requires-python = ">=3.12,<3.13"
-dependencies = ["qa-contracts"]
+dependencies = [
+    "qa-contracts",
+    "pypdf>=4.2,<7",
+    "openpyxl>=3.1,<4",
+    "python-docx>=1.1,<2",
+    "xlrd>=2.0,<3",
+]
 
 [build-system]
 requires = ["hatchling"]

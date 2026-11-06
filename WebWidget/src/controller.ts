@@ -37,6 +37,7 @@ export class WidgetController {
   private readonly view: WidgetView;
   private readonly selector: KnowledgeSelector | null;
   private readonly cleanups: Array<() => void> = [];
+  private readonly lifetime = new AbortController();
   private catalogRequested = false;
 
   constructor(options: ControllerOptions) {
@@ -78,7 +79,7 @@ export class WidgetController {
     if (this.state.destroyed) return;
     this.dispatch({ type: "catalog/loading" });
     try {
-      const page = await this.client.getKnowledgeCatalog();
+      const page = await this.client.getKnowledgeCatalog({ signal: this.lifetime.signal });
       this.dispatch({ type: "catalog/loaded", items: toCatalogItems(page.items) });
     } catch (error) {
       this.dispatch({ type: "catalog/failed", error: describeError(error) });
@@ -101,7 +102,10 @@ export class WidgetController {
     try {
       let { sessionId } = this.state;
       if (!sessionId) {
-        const session = await this.client.createSession({ selection: this.state.selection });
+        const session = await this.client.createSession(
+          { selection: this.state.selection },
+          { signal: this.lifetime.signal },
+        );
         if (this.state.destroyed) return;
         sessionId = session.session_id;
         this.dispatch({ type: "session/created", sessionId, scopeRevision: session.scope_revision });
@@ -109,7 +113,7 @@ export class WidgetController {
       const response = await this.client.submitAnswer(
         sessionId,
         { question },
-        { idempotencyKey: newIdempotencyKey() },
+        { idempotencyKey: newIdempotencyKey(), signal: this.lifetime.signal },
       );
       if (this.state.destroyed) return;
       const answerId = response.handle?.answer_id ?? response.answer?.answer_id;
@@ -125,6 +129,7 @@ export class WidgetController {
   destroy(): void {
     if (this.state.destroyed) return;
     this.dispatch({ type: "destroy" });
+    this.lifetime.abort();
     for (const cleanup of this.cleanups.splice(0)) cleanup();
     this.view.remove();
   }
@@ -146,10 +151,11 @@ export class WidgetController {
       return;
     }
     try {
-      const session = await this.client.setSessionSelection(sessionId, {
-        selection,
-        expected_scope_revision: scopeRevision,
-      });
+      const session = await this.client.setSessionSelection(
+        sessionId,
+        { selection, expected_scope_revision: scopeRevision },
+        { signal: this.lifetime.signal },
+      );
       this.dispatch({
         type: "selection/set",
         selection: session.selection,

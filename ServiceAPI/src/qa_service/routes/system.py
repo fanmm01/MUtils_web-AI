@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from qa_contracts.base import SCHEMA_VERSION, ContractModel
+from qa_contracts.base import HTTP_SCHEMA_VERSION, ContractModel
 
 from ..deps import ContainerDep
 
@@ -14,7 +14,7 @@ router = APIRouter(tags=["system"])
 class Health(ContractModel):
     status: str
     mode: str
-    schema_version: int = SCHEMA_VERSION
+    schema_version: int = HTTP_SCHEMA_VERSION
 
 
 class Readiness(ContractModel):
@@ -25,7 +25,7 @@ class Readiness(ContractModel):
 
 class CapabilitiesBody(ContractModel):
     mode: str
-    schema_version: int = SCHEMA_VERSION
+    schema_version: int = HTTP_SCHEMA_VERSION
     implemented: list[str]
     unimplemented: list[str]
     selection_limits: dict[str, int]
@@ -49,10 +49,18 @@ async def readiness(container: ContainerDep) -> Readiness:
 @router.get("/v1/capabilities", response_model=CapabilitiesBody)
 async def capabilities(container: ContainerDep) -> CapabilitiesBody:
     limits = container.settings.selection
+    # Operational mode wires real A1 services (the database opens lazily on the
+    # first business call), so advertise them. Scaffold mode keeps them at 501.
+    if container.settings.mode == "operational":
+        implemented = ["health", "readiness", "capabilities", *container.business_features]
+        unimplemented = list(container.scaffold_features)
+    else:
+        implemented = ["health", "readiness", "capabilities"]
+        unimplemented = [*container.business_features, *container.scaffold_features]
     return CapabilitiesBody(
         mode=container.mode,
-        implemented=["health", "readiness", "capabilities"],
-        unimplemented=list(container.scaffold_features),
+        implemented=implemented,
+        unimplemented=unimplemented,
         selection_limits={
             "max_candidate_kbs": limits.max_candidate_kbs,
             "max_selected_kbs": limits.max_selected_kbs,

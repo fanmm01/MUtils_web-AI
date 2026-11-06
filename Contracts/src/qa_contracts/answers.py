@@ -207,7 +207,7 @@ AnswerEventType = Literal[
 
 
 class AnswerEvent(ContractModel):
-    schema_version: int = 1
+    schema_version: Literal[1] = 1
     answer_id: ID
     session_id: ID
     seq: int = Field(ge=1)

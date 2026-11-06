@@ -1,6 +1,8 @@
 /**
- * Admin app state: current route and service status. Holds no credentials or
- * model secrets; page data stays inside each page.
+ * Admin app state: current route, selected knowledge base and service status.
+ * Holds no credentials or model secrets; page data stays inside each page. The
+ * selected knowledge base lives in the URL hash (`#/content?kb=…`), so a reload
+ * keeps it without browser storage.
  */
 
 import type { Client } from "@qa/client";
@@ -29,11 +31,13 @@ export type ServiceState =
 
 export interface AppState {
   route: RouteId;
+  /** Knowledge base the KB-scoped pages work on; null until one is chosen. */
+  kbId: string | null;
   service: ServiceState;
 }
 
 export type AppAction =
-  | { type: "route"; route: RouteId }
+  | { type: "route"; route: RouteId; kbId: string | null }
   | { type: "service"; service: ServiceState };
 
 export type Listener = (state: AppState, previous: AppState) => void;
@@ -47,13 +51,25 @@ export interface Store {
 /** What a page receives; pages register cleanup for anything they mount. */
 export interface PageContext {
   client: Client;
+  route: RouteId;
+  kbId: string | null;
+  /** Aborted when the page is left: pass it to every request the page starts. */
+  signal: AbortSignal;
   onDispose(cleanup: () => void): void;
+  /** Go to a page; `kbId` defaults to the current selection. */
+  navigate(route: RouteId, kbId?: string | null, notice?: string): void;
+  /** A one-time message carried over from the previous page's action. */
+  notice?: string;
+  /** Interval for polling job state; tests shorten it. */
+  jobPollMs: number;
 }
 
 function reduce(state: AppState, action: AppAction): AppState {
   switch (action.type) {
     case "route":
-      return state.route === action.route ? state : { ...state, route: action.route };
+      return state.route === action.route && state.kbId === action.kbId
+        ? state
+        : { ...state, route: action.route, kbId: action.kbId };
     case "service":
       return { ...state, service: action.service };
   }
@@ -75,4 +91,16 @@ export function createStore(initial: AppState): Store {
       return () => listeners.delete(listener);
     },
   };
+}
+
+/** Parse `#/route?kb=id`; unknown routes fall back to the knowledge page. */
+export function parseHash(hash: string): { route: RouteId; kbId: string | null } {
+  const raw = hash.replace(/^#\/?/, "");
+  const [path = "", query = ""] = raw.split("?", 2);
+  const kb = new URLSearchParams(query).get("kb");
+  return { route: isRouteId(path) ? path : "knowledge", kbId: kb ? kb : null };
+}
+
+export function formatHash(route: RouteId, kbId: string | null): string {
+  return kbId ? `#/${route}?kb=${encodeURIComponent(kbId)}` : `#/${route}`;
 }

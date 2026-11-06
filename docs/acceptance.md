@@ -1,6 +1,6 @@
 # 验收记录
 
-本文件按课程任务三的七项功能与模型/分发补充要求记录验收。**P1 只完成框架，业务功能均未验收**；下表的“P1 状态”指框架层证据，不代表业务通过。
+本文件按课程任务三的七项功能与模型/分发补充要求记录验收。**P1 只完成框架，业务功能均未验收**；下表的“P1 状态”指框架层证据，不代表业务通过。当前工作树还完成了 P1 修复及 P2 Contract Gate；最新测试与保留风险见 [P1阶段复核与P2分工计划.md](P1阶段复核与P2分工计划.md)。以下 150 项和端口 8765 的记录均为原始 P1 历史记录，不代表修改后重新运行同样的真实进程冒烟。
 
 ## 1. 七项课程功能
 
@@ -42,17 +42,17 @@
 | 分发检查 | `python scripts/check_distribution.py --check` | 扫描 Git 追踪文件与源码树，未发现权重（启发式） |
 | 工程脚本 | `pytest tests/scaffold/test_scripts.py` | 通过：只读、不探测、不联网，权重标记与跳过依赖目录正确 |
 | 前端类型检查与构建 | `npm ci`、`npm run typecheck`、`npm run build` | 退出码 0：`@qa/client`、`@qa/webui`、`@qa/widget` 三个工作区 |
-| 前端框架测试 | `npm run test:scaffold` | `@qa/client` 1 项通过；`tests/frontend/scaffold.spec.ts` 9 项通过：导航含模型页、模型页不检测不伪造、插件打开/关闭/销毁、选库与推理控件保持占位、各页“尚未实现”、无假成功或假回答，以及 3 项源码/产物静态检查 |
+| 前端框架测试 | `npm run test:scaffold` | 原 P1 运行时 `@qa/client` 1 项通过、前端 9 项通过；后续复核新增 Widget 分发测试，当前 10 项前端测试（见阶段报告） |
 
 全套 Python 测试：`150 passed`（`tests/scaffold` + `tests/contracts`），1 条 Starlette 弃用警告。
 
-启动冒烟（真实进程，临时数据目录）：`qa-api --port 8765` → `/healthz` 200 `{"status":"ok","mode":"scaffold","schema_version":1}`、`/readyz` 503、`GET /v1/kbs` 501、`POST /v1/search {}` 422（`field=question`）；运行后临时数据目录未被创建。
+启动冒烟（原始 P1 历史记录，非当前 P2 Gate 实测）：`qa-api --port 8765` → `/healthz` 200 `{"status":"ok","mode":"scaffold","schema_version":1}`、`/readyz` 503、`GET /v1/kbs` 501、`POST /v1/search {}` 422（`field=question`）；运行后临时数据目录未被创建。当前 Gate 的 HTTP schema_version 已变更为 2，须按新契约重跑真实进程冒烟。
 
 前端冒烟（真实进程）：`qa-api` 与 WebUI 开发服务器（`npm run dev -w @qa/webui`，127.0.0.1:5173）同时运行，经开发服务器代理访问 `/healthz` 200、`/readyz` 503、两个 capabilities 接口 200，`/v1/kbs`、`/v1/knowledge-catalog`、`/v1/issues`、`/v1/models/runtimes`、`POST /v1/sessions` 均为 501。构建出的 `qa-widget.iife.js` 在 jsdom 中按 data 属性只挂载一次，样式只在 Shadow DOM 内，销毁后移除节点。
 
 ## 3. 未验证与延期项
 
-- P1-A2（问答核心语义）由另一并行会话负责，本记录不包含其结果。
+- P1-A2 的核心 scaffold 与事件测试现已纳入默认 pytest 收集；独立审查及 P2 Gate 修复结果见阶段复核报告。原始 P1 的 150 项记录未包括核心测试。
 - P1-B（WebUI/WebWidget）只在 jsdom 中测试，未在真实浏览器中手动点测；`test:e2e`（Playwright）随 P3/P4 的插件与管理端用例建立。
 - 真实语料、多格式解析、OCR、数据库、任务队列、模型发现/安装/推理、检索质量与延迟：全部未执行，不得引用为通过。
 - 本轮未访问 Ollama/LM Studio 官方文档（网络校验未通过），适配器协议与取消语义仍是待核验契约；本机只读观察到 0.17.5 与两个已下载模型，未加载、未验证角色。

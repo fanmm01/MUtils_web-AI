@@ -266,6 +266,190 @@ fieldset:disabled button {
   list-style: none;
 }
 
+.intro {
+  margin: 0 0 16px;
+  color: var(--muted);
+}
+
+.service-badge[data-mode="operational"] {
+  border-color: #7fb37f;
+  background: #eef8ee;
+}
+
+.kb-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px 24px;
+  margin-bottom: 16px;
+  padding: 10px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.kb-bar .facts,
+.kb-bar .note {
+  margin: 0;
+}
+
+.badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #eef2fb;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.status[data-kind="ok"] {
+  border: 1px solid #7fb37f;
+  background: #eef8ee;
+}
+
+.status-details {
+  margin: 4px 0;
+  padding-left: 20px;
+}
+
+.table caption {
+  padding-bottom: 4px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: left;
+}
+
+.table .empty.error {
+  color: #a33a3a;
+}
+
+.table tr[aria-current="true"] {
+  background: #f3f6fd;
+}
+
+code.id,
+.path-list code {
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.row-actions,
+.confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.confirm {
+  margin: 8px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--warn-border);
+  border-radius: 6px;
+  background: var(--warn-bg);
+}
+
+.confirm p {
+  margin: 0;
+}
+
+button.danger {
+  border-color: #b8443f;
+  background: #b8443f;
+}
+
+button.secondary {
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.split {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+  margin-top: 12px;
+}
+
+.job-list {
+  display: grid;
+  gap: 12px;
+}
+
+.job {
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.job h3,
+.editor h3 {
+  margin: 0 0 6px;
+  font-size: 15px;
+}
+
+.job-state-succeeded {
+  color: #2f7a2f;
+  font-weight: 600;
+}
+
+.job-state-failed,
+.job-state-outcome_unknown {
+  color: #a33a3a;
+  font-weight: 600;
+}
+
+.job-log {
+  margin: 4px 0;
+  padding-left: 20px;
+  font-size: 13px;
+}
+
+.job-diagnostics tr[data-status="failed"] td {
+  color: #a33a3a;
+}
+
+.path-list {
+  max-height: 200px;
+  margin: 4px 0;
+  padding-left: 20px;
+  overflow-y: auto;
+}
+
+.group.danger summary {
+  color: #a33a3a;
+  font-weight: 600;
+}
+
+.consent {
+  display: block;
+  margin: 8px 0;
+  font-weight: 600;
+}
+
+.preview,
+.diff,
+.editor,
+.publish {
+  margin-top: 12px;
+}
+
+.editor {
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.editor h3:focus {
+  outline: none;
+}
+
+.page-link {
+  align-self: center;
+  color: var(--accent);
+}
+
 @media (max-width: 720px) {
   .qa-admin {
     grid-template-areas:

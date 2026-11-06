@@ -6,7 +6,15 @@ model loading, no FastAPI import.
 
 from __future__ import annotations
 
-from .base import ID, SCHEMA_VERSION, ContractModel, Page, utc_now
+from .base import (
+    EVENT_SCHEMA_VERSION,
+    HTTP_SCHEMA_VERSION,
+    ID,
+    SCHEMA_VERSION,
+    ContractModel,
+    Page,
+    utc_now,
+)
 from .errors import (
     STATUS_BY_CODE,
     APIError,
@@ -36,8 +44,10 @@ __all__ = [
     "ErrorBody",
     "ErrorCode",
     "ErrorDetail",
+    "EVENT_SCHEMA_VERSION",
     "EvidenceInsufficient",
     "FeatureNotImplemented",
+    "HTTP_SCHEMA_VERSION",
     "ID",
     "InferencePolicyViolation",
     "ModelCapabilityMissing",

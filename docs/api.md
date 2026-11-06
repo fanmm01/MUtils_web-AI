@@ -9,6 +9,7 @@
 - 响应头 `X-Request-ID`：服务端回显调用方提供的值，否则生成新的 ID；错误体中的 `request_id` 与之一致。
 - 时间均为 UTC、带时区；列表使用游标分页（`limit`、`cursor`）。
 - ID 均为服务端生成的不透明字符串；客户端不得解析其结构。
+- HTTP 请求/响应契约版本为 `2`（健康检查、capabilities 及请求 fixtures）；SSE 事件仍使用 `schema_version=1`，以便重放 P1 已保存的事件。事件版本不是 HTTP 版本，旧 HTTP v1 请求不保证兼容新的导入接口。
 
 ### 1.1 错误封装
 
@@ -49,7 +50,7 @@
 
 | 方法 | 路径 | P1 行为 |
 | --- | --- | --- |
-| GET | `/healthz` | `200`，`{"status":"ok","mode":"scaffold","schema_version":1}` |
+| GET | `/healthz` | `200`，`{"status":"ok","mode":"scaffold","schema_version":2}` |
 | GET | `/readyz` | `503`，`{"ready":false,"reason":"…","mode":"scaffold"}` |
 | GET | `/v1/capabilities` | `200`，已实现/未实现功能与选库限额 |
 
@@ -73,7 +74,13 @@
 
 **任务与插件**：`GET /v1/jobs/{job_id}`，`POST /v1/jobs/{job_id}/cancel`，`GET /v1/jobs/{job_id}/events`，`POST /v1/widget/tickets`。
 
-## 4. 选库请求
+## 4. 导入、上传与镜像确认（P2 Gate 契约；业务尚未实现）
+
+- `POST /v1/uploads` 接收 `{source_id, selection?, files:[{relative_path,digest,size}]}`，返回 `{batch_id,source_id}`；selection 记录客户端选择范围，但不能授权删除，客户端也不可发送 `complete`。`PUT /v1/uploads/{batch_id}/files?relative_path=...` 失败时不得调用 complete。`POST /v1/uploads/{batch_id}/complete` 返回服务端核验的 `SourceManifest`，包括 `scan_scope`（full/partial）、`scan_status`（succeeded/failed）、`complete`；只有成功全量扫描可将 complete 设为 true。上传响应在 scaffold 阶段仍是 501。
+- `POST /v1/kbs/{kb_id}/imports/preview` 接受 `ImportPreviewRequest`（kb_id、source_id、mode、selection），不要求预览 hash，也不执行删除。`POST /v1/kbs/{kb_id}/imports` 接受 `ImportRequest`，必须提供非空 `expected_preview_hash`；P2 业务实现必须核对预览、主体、来源、范围、活动版本及文件 hash，发现变化返回 409。当前有效请求仍是 501。
+- 最终 `ResolvedScope.targets` 必须非空、每库至多一次、每项含不可变 `version_id`；请求 `explicit.targets` 仍允许省略 version_id，在执行前固定。关键词读取使用带 kb/version、keyword profile 和 index ref 的单库 `SearchScope`，由受权 SnapshotReader 返回；不能混用多个库的原始 BM25 分数。
+
+## 5. 选库请求
 
 `selection` 是严格判别联合，`mode` 决定分支，两个分支的字段互斥：
 
@@ -97,7 +104,7 @@
 
 `policy` 取 `local_only`（默认）或 `configured`。`configured` 仅允许服务器预配置的外接 profile，不表示可自由填写端点或密钥。
 
-## 5. 模型发现与安装
+## 6. 模型发现与安装
 
 - 发现请求只接受 `{"target_ids": ["ollama"]}`；URL、路径、凭据等字段因 `extra="forbid"` 被拒绝。目标必须在服务端 allow-list 中。
 - 安装两步走，没有捷径：
@@ -117,7 +124,7 @@ Idempotency-Key: <client-generated>
 
 `confirmed` 必须为 `true` 且 `preview_id`/`preview_hash` 匹配未过期的预览。CLI 的 `install-confirm` 要求显式 `--yes`。
 
-## 6. SSE 事件
+## 7. SSE 事件
 
 - 回答：`GET /v1/answers/{answer_id}/events`，每个事件带 `answer_id`、`session_id`、`seq`（从 1 递增）。
 - 任务：`GET /v1/jobs/{job_id}/events`，每个事件带 `job_id`，绝不携带伪造的 `answer_id`。
@@ -126,7 +133,7 @@ Idempotency-Key: <client-generated>
 - 心跳以 SSE 注释形式发送；客户端解析器必须忽略注释行。
 - 事件类型全集与 payload schema 见 [events.schema.json](events.schema.json)。
 
-## 7. 客户端
+## 8. 客户端
 
 - Python：[Clients/python/](../Clients/python/) 的 `qa_client.Client`，错误映射为 `QAError(code, message, status, details, request_id)`。
 - CLI：`qa --help`；未实现命令以退出码 `3` 结束，并在 stderr 输出 JSON 错误。

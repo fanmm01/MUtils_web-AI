@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import AwareDatetime, Field
+from pydantic import AwareDatetime, Field, field_validator, model_validator
 
 from .base import ID, ContractModel, utc_now
 
@@ -62,6 +62,19 @@ class ParsedDocument(ContractModel):
     blocks: list[ParsedBlock] = Field(default_factory=list)
     diagnostics: list[str] = Field(default_factory=list)
     needs_ocr: bool = False
+
+
+class ChunkProfile(ContractModel):
+    """Explicit corpus-tested settings; the Gate does not certify a default size."""
+
+    target_tokens: int = Field(ge=1)
+    overlap_tokens: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def _overlap_smaller_than_target(self) -> ChunkProfile:
+        if self.overlap_tokens >= self.target_tokens:
+            raise ValueError("chunk overlap must be smaller than the target length")
+        return self
 
 
 class Chunk(ContractModel):
@@ -134,25 +147,90 @@ class Source(ContractModel):
     created_at: AwareDatetime = Field(default_factory=utc_now)
 
 
-class SourceManifest(ContractModel):
-    source_id: ID
-    complete: bool = True
-    files: list[ManifestFile] = Field(default_factory=list)
-    scanned_at: AwareDatetime = Field(default_factory=utc_now)
-
-
-class ManifestFile(ContractModel):
-    relative_path: str
-    digest: str
-    size: int = Field(ge=0)
-
-
 class Selection(ContractModel):
     """File selection for an import or source scan (not knowledge selection)."""
 
     include_globs: list[str] = Field(default_factory=list)
     exclude_globs: list[str] = Field(default_factory=list)
     relative_paths: list[str] = Field(default_factory=list)
+
+    @field_validator("relative_paths")
+    @classmethod
+    def _safe_selected_paths(cls, values: list[str]) -> list[str]:
+        for value in values:
+            _validate_relative_path(value)
+        return values
+
+
+class UploadManifest(ContractModel):
+    """Untrusted client file claims; these never authorize mirror deletions."""
+
+    source_id: ID
+    selection: Selection = Field(default_factory=Selection)
+    files: list[ManifestFile] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _unique_files(self) -> UploadManifest:
+        paths = [entry.relative_path for entry in self.files]
+        if len(set(paths)) != len(paths):
+            raise ValueError("manifest file paths must be unique")
+        selected = self.selection.relative_paths
+        if len(set(selected)) != len(selected):
+            raise ValueError("selected file paths must be unique")
+        if selected and set(selected) != set(paths) and not (
+            isinstance(self, SourceManifest) and self.scan_status == "failed"
+        ):
+            raise ValueError("selected file paths must match the upload manifest")
+        return self
+
+
+class SourceManifest(UploadManifest):
+    """Server-verified scan result; only a successful full scan can be complete."""
+
+    scan_scope: Literal["full", "partial"]
+    scan_status: Literal["succeeded", "failed"]
+    complete: bool
+    scanned_at: AwareDatetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def _complete_only_for_successful_full_scan(self) -> SourceManifest:
+        if self.complete and (
+            self.scan_scope != "full"
+            or self.scan_status != "succeeded"
+            or self.selection.include_globs
+            or self.selection.exclude_globs
+            or self.selection.relative_paths
+        ):
+            raise ValueError("complete requires an unrestricted successful full source scan")
+        return self
+
+
+class UploadBatch(ContractModel):
+    batch_id: ID
+    source_id: ID
+
+
+def _validate_relative_path(value: str) -> None:
+    path = value.replace("\\", "/")
+    parts = path.split("/")
+    if (
+        not value or value != path or path.startswith("/") or ":" in path
+        or any(part in {"", ".", ".."} for part in parts)
+        or any(ord(char) < 32 for char in path)
+    ):
+        raise ValueError("relative paths must stay within the source directory")
+
+
+class ManifestFile(ContractModel):
+    relative_path: str = Field(min_length=1)
+    digest: str = Field(min_length=1)
+    size: int = Field(ge=0)
+
+    @field_validator("relative_path")
+    @classmethod
+    def _safe_relative_path(cls, value: str) -> str:
+        _validate_relative_path(value)
+        return value
 
 
 class Snapshot(ContractModel):
@@ -161,17 +239,31 @@ class Snapshot(ContractModel):
     parent_version_id: ID | None = None
     state: SnapshotState = SnapshotState.DRAFT
     indexed_file_ids: list[str] = Field(default_factory=list)
+    document_revisions: dict[ID, ID] = Field(default_factory=dict)
+    keyword_profile: str | None = None
+    keyword_index_ref: str | None = None
     embedding_profile: str | None = None
     vector_index: Literal["present", "absent"] = "absent"
     created_at: AwareDatetime = Field(default_factory=utc_now)
 
+    @model_validator(mode="after")
+    def _published_keyword_index_is_readable(self) -> Snapshot:
+        if self.state in {SnapshotState.READY, SnapshotState.PUBLISHED} and not (
+            self.keyword_profile and self.keyword_index_ref
+        ):
+            raise ValueError("ready snapshots require a keyword index and profile")
+        return self
+
 
 class SearchScope(ContractModel):
-    """One knowledge base pinned to one immutable version."""
+    """One knowledge base pinned to one immutable version and index profile."""
 
     kb_id: ID
     version_id: ID
     scope_id: ID | None = None
+    keyword_profile: str = Field(min_length=1)
+    index_ref: str = Field(min_length=1)
+    embedding_profile: str | None = None
 
 
 class CreateKB(ContractModel):
@@ -203,12 +295,15 @@ class PutQA(ContractModel):
     expected_revision_id: ID | None = None
 
 
-class ImportRequest(ContractModel):
+class ImportPreviewRequest(ContractModel):
     kb_id: ID
     source_id: ID
     mode: Literal["merge", "mirror"] = "merge"
     selection: Selection = Field(default_factory=Selection)
-    expected_preview_hash: str | None = None
+
+
+class ImportRequest(ImportPreviewRequest):
+    expected_preview_hash: str = Field(min_length=1)
 
 
 class ImportPreview(ContractModel):
@@ -246,4 +341,5 @@ class RollbackRequest(ContractModel):
     expected_active_version_id: ID | None = None
 
 
+UploadManifest.model_rebuild()
 SourceManifest.model_rebuild()

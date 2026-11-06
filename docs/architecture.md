@@ -25,7 +25,7 @@ Python SDK (qa_client) ─────┘             │
 ## 2. Contract Gate 与版本规则
 
 - `Contracts/src/qa_contracts/` 是跨组冻结面；破坏性修改只能在阶段开头的 Contract Gate 进行。
-- `qa_contracts.base.SCHEMA_VERSION` 当前为 `1`，出现在健康检查、能力声明和事件 payload 中。
+- `qa_contracts.base.HTTP_SCHEMA_VERSION` 当前为 `2`，用于健康检查、能力声明和 HTTP 请求 fixtures；`EVENT_SCHEMA_VERSION=1` 用于持久答案/任务事件，旧 SSE 回放仍可读取。`SCHEMA_VERSION` 是事件版本的兼容别名，不能用于新 HTTP 契约。
 - 生成的契约文件 [openapi.json](openapi.json)、[events.schema.json](events.schema.json) 由 `scripts/export_contracts.py` 从代码导出；`--check` 在仓库中校验其未漂移，禁止手工编辑。
 - 兼容性新增（可选字段、新事件类型在非终态集合之外）必须通过契约测试，且不得要求另一组同步重写。
 - 错误码集合与 HTTP 状态映射见 [events.schema.json](events.schema.json) 的 `error_codes`。
@@ -36,7 +36,8 @@ Python SDK (qa_client) ─────┘             │
 
 ```
 accepted → inference.bound → selection.resolved → retrieval.completed
-        → citation.ready → answer.delta* → {completed | refused | failed | cancelled}
+        → citation.ready* / answer.delta+ → completed
+        → refused | failed | cancelled（拒答/异常无须答案增量）
 ```
 
 - 终态四个，恰好出现一次；`answer.completed/refused/failed/cancelled` 之后不得再有事件。

@@ -6,7 +6,7 @@
  */
 
 export { createClient, QAError } from "./client.js";
-export type { Client, ClientOptions, RequestOptions } from "./client.js";
+export type { Client, ClientOptions, IdempotentRequestOptions, RequestOptions } from "./client.js";
 export { subscribeAnswer, subscribeJob, parseSSE } from "./sse.js";
 export type { SSECallbacks } from "./sse.js";
 export type * from "./types.js";

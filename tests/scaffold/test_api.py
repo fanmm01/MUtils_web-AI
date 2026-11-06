@@ -24,7 +24,9 @@ BUSINESS_CASES: list[tuple[str, str, dict[str, object] | None]] = [
     ("PATCH", "/v1/qa-pairs/qa1", {"kb_id": "kb1", "question": "q", "answer": "a"}),
     ("DELETE", "/v1/qa-pairs/qa1", None),
     ("POST", "/v1/kbs/kb1/imports/preview", {"kb_id": "kb1", "source_id": "s1"}),
-    ("POST", "/v1/kbs/kb1/imports", {"kb_id": "kb1", "source_id": "s1"}),
+    ("POST", "/v1/kbs/kb1/imports", {
+        "kb_id": "kb1", "source_id": "s1", "expected_preview_hash": "h",
+    }),
     ("POST", "/v1/sources/s1/sync", {}),
     ("GET", "/v1/source-roots", None),
     ("POST", "/v1/source-roots/root1/scan", None),
@@ -74,14 +76,14 @@ BUSINESS_CASES: list[tuple[str, str, dict[str, object] | None]] = [
     ("GET", "/v1/jobs/j1", None),
     ("GET", "/v1/jobs/j1/events", None),
     ("POST", "/v1/jobs/j1/cancel", None),
-    ("POST", "/v1/uploads", {"source_id": "s1"}),
+    ("POST", "/v1/uploads", {"source_id": "s1", "files": []}),
     ("POST", "/v1/uploads/b1/complete", None),
 ]
 
 
 def test_health_reports_scaffold(client: TestClient) -> None:
     body = client.get("/healthz").json()
-    assert body == {"status": "ok", "mode": "scaffold", "schema_version": 1}
+    assert body == {"status": "ok", "mode": "scaffold", "schema_version": 2}
     assert client.get("/healthz").status_code == 200
 
 
@@ -94,6 +96,7 @@ def test_readiness_is_false(client: TestClient) -> None:
 def test_capabilities_advertise_unimplemented(client: TestClient) -> None:
     body = client.get("/v1/capabilities").json()
     assert body["mode"] == "scaffold"
+    # Scaffold mode opens no database, so A1 business features stay unimplemented.
     assert "knowledge" in body["unimplemented"]
     assert "models" in body["unimplemented"]
     assert body["selection_limits"]["max_selected_kbs"] >= 1
@@ -103,7 +106,10 @@ def test_capabilities_advertise_unimplemented(client: TestClient) -> None:
 def test_business_routes_return_501(
     client: TestClient, method: str, path: str, payload: dict[str, object] | None
 ) -> None:
-    response = client.request(method, path, json=payload)
+    headers = {}
+    if path == "/v1/model-installs" or path.endswith("/verifications"):
+        headers["Idempotency-Key"] = "scaffold-test-key"
+    response = client.request(method, path, json=payload, headers=headers)
     assert response.status_code == 501, response.text
     body = response.json()
     assert body["error"]["code"] == "FEATURE_NOT_IMPLEMENTED"
@@ -196,9 +202,30 @@ def test_model_routes_return_501_without_provider_calls(
     assert not (tmp_path / "var").exists()
 
 
+def test_content_create_rejects_path_body_kb_mismatch(client: TestClient) -> None:
+    for kind, body in (
+        ("documents", {"kb_id": "different", "title": "t"}),
+        ("qa-pairs", {"kb_id": "different", "question": "q", "answer": "a"}),
+    ):
+        response = client.post(f"/v1/kbs/current/{kind}", json=body)
+        assert response.status_code == 422, response.text
+        assert response.json()["error"]["code"] == "VALIDATION_FAILED"
+    assert client.post(
+        "/v1/kbs/current/documents", json={"kb_id": "current", "title": "t"}
+    ).status_code == 501
+
+
 def test_install_confirmation_requires_preview_and_idempotency(client: TestClient) -> None:
     missing = client.post("/v1/model-installs", json={"preview_hash": "h", "confirmed": True})
     assert missing.status_code == 422
+    for body in (
+        {"preview_id": "p1", "preview_hash": "h"},
+        {"preview_id": "p1", "preview_hash": "h", "confirmed": False},
+    ):
+        response = client.post(
+            "/v1/model-installs", json=body, headers={"Idempotency-Key": "key-1"}
+        )
+        assert response.status_code == 422, response.text
 
     well_formed = client.post(
         "/v1/model-installs",
@@ -206,6 +233,53 @@ def test_install_confirmation_requires_preview_and_idempotency(client: TestClien
         headers={"Idempotency-Key": "key-1"},
     )
     assert well_formed.status_code == 501
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        ("/v1/model-installs", {"preview_id": "p1", "preview_hash": "h", "confirmed": True}),
+        ("/v1/models/m1/verifications", {"roles": ["generator"]}),
+    ],
+)
+def test_model_jobs_require_nonempty_idempotency_key(
+    client: TestClient, path: str, body: dict[str, object]
+) -> None:
+    for headers in ({}, {"Idempotency-Key": " "}):
+        response = client.post(path, json=body, headers=headers)
+        assert response.status_code == 422, response.text
+        assert response.json()["error"]["code"] == "VALIDATION_FAILED"
+    assert client.post(path, json=body, headers={"Idempotency-Key": "k1"}).status_code == 501
+
+
+def test_model_jobs_advertise_idempotency_key_in_openapi(client: TestClient) -> None:
+    paths = client.get("/openapi.json").json()["paths"]
+    for path in ("/v1/model-installs", "/v1/models/{model_id}/verifications"):
+        params = paths[path]["post"]["parameters"]
+        assert any(
+            p["name"] == "Idempotency-Key" and p["in"] == "header" and p["required"]
+            for p in params
+        )
+
+
+def test_cross_origin_sse_resume_preflight_allows_cursor(tmp_path) -> None:
+    from qa_service.app import create_app
+    from qa_service.settings import Settings
+
+    app = create_app(Settings(data_dir=tmp_path / "var", allowed_origins=["https://host.test"]))
+    with TestClient(app, raise_server_exceptions=False) as cross_origin:
+        response = cross_origin.options(
+            "/v1/answers/a1/events",
+            headers={
+                "Origin": "https://host.test",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "authorization,last-event-id",
+            },
+        )
+    assert response.status_code == 200, response.text
+    assert response.headers["access-control-allow-origin"] == "https://host.test"
+    assert "last-event-id" in response.headers["access-control-allow-headers"].lower()
+    assert not (tmp_path / "var").exists()
 
 
 def test_sse_preflight_returns_501(client: TestClient) -> None:

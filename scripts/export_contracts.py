@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 from qa_contracts.answers import AnswerEvent
+from qa_contracts.base import EVENT_SCHEMA_VERSION, HTTP_SCHEMA_VERSION
 from qa_contracts.errors import STATUS_BY_CODE, ErrorCode
 from qa_contracts.operations import JobEvent
 
@@ -31,7 +32,8 @@ def export_openapi(app, path: Path) -> dict[str, object]:
 def build_event_schema() -> dict[str, object]:
     """SSE contract: answer and job events are separate shapes with stable IDs."""
     return {
-        "schema_version": 1,
+        "schema_version": EVENT_SCHEMA_VERSION,
+        "http_schema_version": HTTP_SCHEMA_VERSION,
         "answer_event": AnswerEvent.model_json_schema(),
         "job_event": JobEvent.model_json_schema(),
         "event_types": {

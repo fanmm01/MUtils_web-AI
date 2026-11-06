@@ -30,7 +30,7 @@ def successful_events() -> list[AnswerEvent]:
             "selection.resolved",
             binding_id="binding-1",
             scope_id="scope-1",
-            data={"status": "resolved", "targets": []},
+            data={"status": "resolved", "targets": [{"kb_id": "kb-1", "version_id": "v-1"}]},
         ),
         event(
             4,
@@ -121,6 +121,62 @@ def test_event_after_terminal_is_rejected() -> None:
 
     with pytest.raises(EventSequenceError, match="cannot follow a terminal"):
         validator.consume(event(8, "answer.delta", binding_id="binding-1", scope_id="scope-1"))
+
+
+def test_completion_requires_a_verified_delta() -> None:
+    validator = AnswerEventSequenceValidator()
+    validator.validate(successful_events()[:4])
+    with pytest.raises(EventSequenceError, match="requires a verified answer.delta"):
+        validator.consume(successful_events()[-1].model_copy(update={"seq": 5}))
+    validator.validate(successful_events()[4:])
+    assert validator.terminal
+
+
+def test_duplicate_retrieval_completion_is_rejected() -> None:
+    validator = AnswerEventSequenceValidator()
+    validator.validate(successful_events()[:4])
+    with pytest.raises(EventSequenceError, match="retrieval.completed may appear only once"):
+        validator.consume(successful_events()[3].model_copy(update={"seq": 5}))
+    validator.consume(successful_events()[4])
+
+
+@pytest.mark.parametrize("reason", ["no_match", "needs_clarification"])
+def test_unresolved_refusal_must_match_selection_status(reason: str) -> None:
+    other = "needs_clarification" if reason == "no_match" else "no_match"
+    validator = AnswerEventSequenceValidator()
+    validator.validate([
+        event(1, "answer.accepted"),
+        event(2, "inference.bound", binding_id="binding-1"),
+        event(3, "selection.resolved", binding_id="binding-1", data={"status": reason}),
+    ])
+    with pytest.raises(EventSequenceError, match="must match selection status"):
+        validator.consume(
+            event(4, "answer.refused", binding_id="binding-1", data={"reason": other})
+        )
+    validator.consume(
+        event(4, "answer.refused", binding_id="binding-1", data={"reason": reason})
+    )
+    assert validator.terminal
+
+
+@pytest.mark.parametrize(
+    "targets",
+    [
+        None,
+        [],
+        [{"kb_id": "kb-1"}],
+        [{"kb_id": "kb-1", "version_id": "v-1"}, {"kb_id": "kb-1", "version_id": "v-2"}],
+    ],
+)
+def test_resolved_selection_requires_unique_pinned_targets(targets: object) -> None:
+    validator = AnswerEventSequenceValidator()
+    validator.validate(successful_events()[:2])
+    with pytest.raises(EventSequenceError, match="pinned targets"):
+        validator.consume(
+            event(3, "selection.resolved", binding_id="binding-1", scope_id="scope-1",
+                  data={"status": "resolved", "targets": targets})
+        )
+    validator.consume(successful_events()[2])
 
 
 def test_routing_refusal_terminates_without_retrieval() -> None:

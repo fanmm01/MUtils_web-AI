@@ -11,10 +11,20 @@ from typing import BinaryIO, Protocol, runtime_checkable
 
 from .answers import AnswerContext, CitationDetail, DraftFragment, Hit, SearchResult
 from .base import ID, Page
-from .knowledge import Chunk, ParsedDocument, Revision, Snapshot
+from .knowledge import (
+    Chunk,
+    ChunkProfile,
+    ParsedDocument,
+    Revision,
+    SearchScope,
+    Snapshot,
+    SourceManifest,
+    UploadBatch,
+    UploadManifest,
+)
 from .models import EmbeddingProfile, RoleBinding
 from .operations import AccessScope
-from .selection import CatalogQuery, KBDescriptor, KBTarget, ResolvedScope
+from .selection import CatalogQuery, KBDescriptor, KBTarget, PinnedKBTarget, ResolvedScope
 
 #: One row per input text, in input order.
 Vectors = list[list[float]]
@@ -36,25 +46,44 @@ class KnowledgeCatalog(Protocol):
 
 @runtime_checkable
 class SnapshotReader(Protocol):
-    async def resolve(self, kb_id: ID, version_id: ID | None) -> Snapshot: ...
+    async def resolve(
+        self, kb_id: ID, version_id: ID | None, access: AccessScope
+    ) -> Snapshot: ...
 
     async def resolve_many(
         self, targets: list[KBTarget], access: AccessScope
     ) -> ResolvedScope: ...
 
-    async def load_chunks(self, version_id: ID, ids: list[ID]) -> list[Chunk]: ...
+    async def search_scope(self, target: PinnedKBTarget, access: AccessScope) -> SearchScope: ...
 
-    async def load_revision(self, revision_id: ID) -> Revision: ...
+    async def load_chunks(
+        self, target: PinnedKBTarget, ids: list[ID], access: AccessScope
+    ) -> list[Chunk]: ...
+
+    async def load_revision(self, revision_id: ID, access: AccessScope) -> Revision: ...
 
 
 @runtime_checkable
 class KeywordReader(Protocol):
-    async def search(self, query: str, scope: Snapshot, k: int) -> list[Hit]: ...
+    async def search(self, query: str, scope: SearchScope, k: int) -> list[Hit]: ...
 
 
 @runtime_checkable
 class VectorReader(Protocol):
-    async def search(self, vector: list[float], scope: Snapshot, k: int) -> list[Hit]: ...
+    async def search(self, vector: list[float], scope: SearchScope, k: int) -> list[Hit]: ...
+
+
+@runtime_checkable
+class ChunkSplitter(Protocol):
+    def split(
+        self,
+        document: ParsedDocument,
+        *,
+        kb_id: ID,
+        version_id: ID,
+        revision_id: ID,
+        profile: ChunkProfile,
+    ) -> list[Chunk]: ...
 
 
 @runtime_checkable
@@ -121,6 +150,15 @@ class EmbeddingCache(Protocol):
     async def get_many(self, keys: list[str]) -> dict[str, list[float]]: ...
 
     async def put_many(self, items: dict[str, list[float]]) -> None: ...
+
+
+@runtime_checkable
+class UploadWriter(Protocol):
+    async def begin(self, manifest: UploadManifest) -> UploadBatch: ...
+
+    async def write(self, batch_id: ID, relative_path: str, stream: BinaryIO) -> None: ...
+
+    async def finish(self, batch_id: ID) -> SourceManifest: ...
 
 
 @runtime_checkable

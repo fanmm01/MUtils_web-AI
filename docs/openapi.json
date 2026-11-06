@@ -404,7 +404,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": 1,
+            "default": 2,
             "title": "Schema Version",
             "type": "integer"
           },
@@ -976,7 +976,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": 1,
+            "default": 2,
             "title": "Schema Version",
             "type": "integer"
           },
@@ -1112,20 +1112,9 @@
         "title": "ImportPreview",
         "type": "object"
       },
-      "ImportRequest": {
+      "ImportPreviewRequest": {
         "additionalProperties": false,
         "properties": {
-          "expected_preview_hash": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Expected Preview Hash"
-          },
           "kb_id": {
             "maxLength": 256,
             "minLength": 1,
@@ -1154,6 +1143,47 @@
         "required": [
           "kb_id",
           "source_id"
+        ],
+        "title": "ImportPreviewRequest",
+        "type": "object"
+      },
+      "ImportRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_preview_hash": {
+            "minLength": 1,
+            "title": "Expected Preview Hash",
+            "type": "string"
+          },
+          "kb_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Kb Id",
+            "type": "string"
+          },
+          "mode": {
+            "default": "merge",
+            "enum": [
+              "merge",
+              "mirror"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "selection": {
+            "$ref": "#/components/schemas/Selection"
+          },
+          "source_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Source Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kb_id",
+          "source_id",
+          "expected_preview_hash"
         ],
         "title": "ImportRequest",
         "type": "object"
@@ -1287,7 +1317,7 @@
         "additionalProperties": false,
         "properties": {
           "confirmed": {
-            "default": false,
+            "const": true,
             "title": "Confirmed",
             "type": "boolean"
           },
@@ -1304,7 +1334,8 @@
         },
         "required": [
           "preview_id",
-          "preview_hash"
+          "preview_hash",
+          "confirmed"
         ],
         "title": "InstallConfirmation",
         "type": "object"
@@ -1613,6 +1644,19 @@
           "state": {
             "$ref": "#/components/schemas/JobState",
             "default": "queued"
+          },
+          "worker_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Worker Id"
           }
         },
         "required": [
@@ -1935,10 +1979,12 @@
         "additionalProperties": false,
         "properties": {
           "digest": {
+            "minLength": 1,
             "title": "Digest",
             "type": "string"
           },
           "relative_path": {
+            "minLength": 1,
             "title": "Relative Path",
             "type": "string"
           },
@@ -2299,6 +2345,30 @@
         "title": "Page[QAPair]",
         "type": "object"
       },
+      "PinnedKBTarget": {
+        "additionalProperties": false,
+        "description": "An authorized KB resolved to its immutable version before retrieval.",
+        "properties": {
+          "kb_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Kb Id",
+            "type": "string"
+          },
+          "version_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Version Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kb_id",
+          "version_id"
+        ],
+        "title": "PinnedKBTarget",
+        "type": "object"
+      },
       "Presence": {
         "description": "Four independent facts; ``unknown`` is a first-class answer.",
         "enum": [
@@ -2600,14 +2670,16 @@
           },
           "targets": {
             "items": {
-              "$ref": "#/components/schemas/KBTarget"
+              "$ref": "#/components/schemas/PinnedKBTarget"
             },
+            "minItems": 1,
             "title": "Targets",
             "type": "array"
           }
         },
         "required": [
-          "scope_id"
+          "scope_id",
+          "targets"
         ],
         "title": "ResolvedScope",
         "type": "object"
@@ -3126,7 +3198,7 @@
             "type": "string"
           },
           "policy_version": {
-            "default": "p1-scaffold",
+            "default": "p2-keyword",
             "title": "Policy Version",
             "type": "string"
           },
@@ -3140,7 +3212,7 @@
           },
           "targets": {
             "items": {
-              "$ref": "#/components/schemas/KBTarget"
+              "$ref": "#/components/schemas/PinnedKBTarget"
             },
             "title": "Targets",
             "type": "array"
@@ -3308,6 +3380,19 @@
             "title": "Created At",
             "type": "string"
           },
+          "document_revisions": {
+            "additionalProperties": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "propertyNames": {
+              "maxLength": 256,
+              "minLength": 1
+            },
+            "title": "Document Revisions",
+            "type": "object"
+          },
           "embedding_profile": {
             "anyOf": [
               {
@@ -3331,6 +3416,28 @@
             "minLength": 1,
             "title": "Kb Id",
             "type": "string"
+          },
+          "keyword_index_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Keyword Index Ref"
+          },
+          "keyword_profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Keyword Profile"
           },
           "parent_version_id": {
             "anyOf": [
@@ -3445,9 +3552,9 @@
       },
       "SourceManifest": {
         "additionalProperties": false,
+        "description": "Server-verified scan result; only a successful full scan can be complete.",
         "properties": {
           "complete": {
-            "default": true,
             "title": "Complete",
             "type": "boolean"
           },
@@ -3458,10 +3565,29 @@
             "title": "Files",
             "type": "array"
           },
+          "scan_scope": {
+            "enum": [
+              "full",
+              "partial"
+            ],
+            "title": "Scan Scope",
+            "type": "string"
+          },
+          "scan_status": {
+            "enum": [
+              "succeeded",
+              "failed"
+            ],
+            "title": "Scan Status",
+            "type": "string"
+          },
           "scanned_at": {
             "format": "date-time",
             "title": "Scanned At",
             "type": "string"
+          },
+          "selection": {
+            "$ref": "#/components/schemas/Selection"
           },
           "source_id": {
             "maxLength": 256,
@@ -3471,7 +3597,10 @@
           }
         },
         "required": [
-          "source_id"
+          "source_id",
+          "scan_scope",
+          "scan_status",
+          "complete"
         ],
         "title": "SourceManifest",
         "type": "object"
@@ -3684,6 +3813,56 @@
         "title": "UpdateSessionSelection",
         "type": "object"
       },
+      "UploadBatch": {
+        "additionalProperties": false,
+        "properties": {
+          "batch_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Batch Id",
+            "type": "string"
+          },
+          "source_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Source Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "batch_id",
+          "source_id"
+        ],
+        "title": "UploadBatch",
+        "type": "object"
+      },
+      "UploadManifest": {
+        "additionalProperties": false,
+        "description": "Untrusted client file claims; these never authorize mirror deletions.",
+        "properties": {
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/ManifestFile"
+            },
+            "title": "Files",
+            "type": "array"
+          },
+          "selection": {
+            "$ref": "#/components/schemas/Selection"
+          },
+          "source_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Source Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_id"
+        ],
+        "title": "UploadManifest",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -3740,57 +3919,6 @@
           "roles"
         ],
         "title": "VerifyModelRequest",
-        "type": "object"
-      },
-      "WidgetTicket": {
-        "additionalProperties": false,
-        "properties": {
-          "expires_at": {
-            "format": "date-time",
-            "title": "Expires At",
-            "type": "string"
-          },
-          "kb_ids": {
-            "items": {
-              "maxLength": 256,
-              "minLength": 1,
-              "type": "string"
-            },
-            "title": "Kb Ids",
-            "type": "array"
-          },
-          "profile_ids": {
-            "items": {
-              "maxLength": 256,
-              "minLength": 1,
-              "type": "string"
-            },
-            "title": "Profile Ids",
-            "type": "array"
-          },
-          "session_id": {
-            "anyOf": [
-              {
-                "maxLength": 256,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Session Id"
-          },
-          "ticket": {
-            "title": "Ticket",
-            "type": "string"
-          }
-        },
-        "required": [
-          "ticket",
-          "expires_at"
-        ],
-        "title": "WidgetTicket",
         "type": "object"
       }
     }
@@ -4786,6 +4914,7 @@
     },
     "/v1/jobs/{job_id}/cancel": {
       "post": {
+        "description": "Request cancellation without lying about work that is still running.\n\nA queued job has not written anything, so it becomes ``cancelled`` at once.\nA running job only enters ``cancel_requested``; the worker confirms the\nterminal state at its next safe point, because it may hold a transaction\nmid-write. Claiming ``cancelled`` here could hide a snapshot that later\nbecomes active.",
         "operationId": "cancel_job_v1_jobs__job_id__cancel_post",
         "parameters": [
           {
@@ -4828,6 +4957,7 @@
     },
     "/v1/jobs/{job_id}/events": {
       "get": {
+        "description": "Persisted event replay as JSON.\n\nThe streaming form is P3; until then a client can poll this endpoint and get\nthe same persisted events with stable sequence numbers.",
         "operationId": "job_events_v1_jobs__job_id__events_get",
         "parameters": [
           {
@@ -4838,13 +4968,36 @@
               "title": "Job Id",
               "type": "string"
             }
+          },
+          {
+            "in": "header",
+            "name": "Last-Event-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last-Event-Id"
+            }
           }
         ],
         "responses": {
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response Job Events V1 Jobs  Job Id  Events Get",
+                  "type": "array"
+                }
               }
             },
             "description": "Successful Response"
@@ -5071,6 +5224,22 @@
             "schema": {
               "title": "Kb Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expected_etag",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Expected Etag"
             }
           }
         ],
@@ -5302,7 +5471,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ImportRequest"
+                "$ref": "#/components/schemas/ImportPreviewRequest"
               }
             }
           },
@@ -5556,7 +5725,7 @@
         },
         "summary": "Rollback Version",
         "tags": [
-          "versions"
+          "sources"
         ]
       }
     },
@@ -5714,7 +5883,7 @@
         },
         "summary": "Diff Versions",
         "tags": [
-          "versions"
+          "sources"
         ]
       }
     },
@@ -5760,7 +5929,7 @@
         },
         "summary": "List Versions",
         "tags": [
-          "versions"
+          "sources"
         ]
       }
     },
@@ -5885,6 +6054,17 @@
     "/v1/model-installs": {
       "post": {
         "operationId": "confirm_install_v1_model_installs_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -6198,6 +6378,15 @@
             "required": true,
             "schema": {
               "title": "Model Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "title": "Idempotency-Key",
               "type": "string"
             }
           }
@@ -7003,7 +7192,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SourceManifest"
+                "$ref": "#/components/schemas/UploadManifest"
               }
             }
           },
@@ -7014,7 +7203,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SourceManifest"
+                  "$ref": "#/components/schemas/UploadBatch"
                 }
               }
             },
@@ -7166,7 +7355,7 @@
         },
         "summary": "Get Version",
         "tags": [
-          "versions"
+          "sources"
         ]
       }
     },
@@ -7218,7 +7407,7 @@
         },
         "summary": "Publish Version",
         "tags": [
-          "versions"
+          "sources"
         ]
       }
     },
@@ -7229,9 +7418,7 @@
           "201": {
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WidgetTicket"
-                }
+                "schema": {}
               }
             },
             "description": "Successful Response"

@@ -4,10 +4,12 @@
   "private": true,
   "type": "module",
   "description": "Embeddable floating Q&A widget. P1 scaffold: layout, lifecycle and placeholder controls only.",
+  "main": "./dist/qa-widget.js",
+  "types": "./dist/types/WebWidget/src/index.d.ts",
   "exports": {
     ".": {
-      "types": "./src/index.ts",
-      "default": "./src/index.ts"
+      "types": "./dist/types/WebWidget/src/index.d.ts",
+      "import": "./dist/qa-widget.js"
     },
     "./dist/*": "./dist/*"
   },
@@ -17,7 +19,7 @@
   ],
   "scripts": {
     "typecheck": "node scripts/run-bin.mjs typescript tsc -p tsconfig.json --noEmit",
-    "build": "node scripts/run-bin.mjs vite vite build && node scripts/run-bin.mjs vite vite build --mode iife"
+    "build": "node scripts/run-bin.mjs vite vite build && node scripts/run-bin.mjs vite vite build --mode iife && node scripts/run-bin.mjs typescript tsc -p tsconfig.json --noEmit false --emitDeclarationOnly true --outDir dist/types"
   },
   "dependencies": {
     "@qa/client": "*"

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 from typing import get_type_hints
 
 import pytest
@@ -9,11 +11,19 @@ from qa_contracts.errors import FeatureNotImplemented
 
 
 def test_core_import_does_not_require_transport_or_runtime_packages() -> None:
-    import sys
-
-    assert "fastapi" not in sys.modules
-    assert "httpx" not in sys.modules
-    assert "ollama" not in sys.modules
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            "import qa_assistant,sys; "
+            "assert not {'fastapi','httpx','ollama'} & sys.modules.keys()",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.asyncio

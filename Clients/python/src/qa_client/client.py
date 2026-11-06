@@ -84,8 +84,11 @@ class Client:
         json: Mapping[str, Any] | None = None,
         params: Mapping[str, Any] | None = None,
         headers: Mapping[str, str] | None = None,
+        content: bytes | None = None,
     ) -> Any:
-        response = self._http.request(method, path, json=json, params=params, headers=headers)
+        response = self._http.request(
+            method, path, json=json, params=params, headers=headers, content=content
+        )
         request_id = response.headers.get("X-Request-ID")
         if response.status_code >= 400:
             raise QAError.from_response(response.status_code, _json_or_none(response), request_id)
@@ -156,6 +159,20 @@ class Client:
         return self._get(f"/v1/kbs/{kb_id}/qa-pairs", params={"limit": limit, "cursor": cursor})
 
     # -- imports and versions --------------------------------------------
+    def begin_upload(self, body: Mapping[str, Any]) -> dict[str, Any]:
+        return self._post("/v1/uploads", json=body)
+
+    def put_upload_file(self, batch_id: str, relative_path: str, data: bytes) -> None:
+        self._request(
+            "PUT",
+            f"/v1/uploads/{batch_id}/files",
+            params={"relative_path": relative_path},
+            content=data,
+        )
+
+    def complete_upload(self, batch_id: str) -> dict[str, Any]:
+        return self._post(f"/v1/uploads/{batch_id}/complete")
+
     def preview_import(self, kb_id: str, body: Mapping[str, Any]) -> dict[str, Any]:
         return self._post(f"/v1/kbs/{kb_id}/imports/preview", json=body)
 
@@ -165,8 +182,32 @@ class Client:
     def sync_source(self, source_id: str, body: Mapping[str, Any]) -> dict[str, Any]:
         return self._post(f"/v1/sources/{source_id}/sync", json=body)
 
+    # -- sources ----------------------------------------------------------
+    def create_source(self, kb_id: str, body: Mapping[str, Any]) -> dict[str, Any]:
+        return self._post(f"/v1/kbs/{kb_id}/sources", json=body)
+
+    def list_sources(self, kb_id: str) -> list[dict[str, Any]]:
+        return self._get(f"/v1/kbs/{kb_id}/sources")
+
+    def get_source(self, source_id: str) -> dict[str, Any]:
+        return self._get(f"/v1/sources/{source_id}")
+
+    def list_roots(self) -> list[str]:
+        return self._get("/v1/source-roots")
+
+    def scan_root(self, root_id: str) -> dict[str, Any]:
+        return self._post(f"/v1/source-roots/{root_id}/scan")
+
     def list_versions(self, kb_id: str) -> list[dict[str, Any]]:
         return self._get(f"/v1/kbs/{kb_id}/versions")
+
+    def get_version(self, version_id: str) -> dict[str, Any]:
+        return self._get(f"/v1/versions/{version_id}")
+
+    def version_diff(self, kb_id: str, left: str, right: str) -> dict[str, Any]:
+        return self._get(
+            f"/v1/kbs/{kb_id}/version-diff", params={"left": left, "right": right}
+        )
 
     def publish_version(self, version_id: str, body: Mapping[str, Any]) -> dict[str, Any]:
         return self._post(f"/v1/versions/{version_id}/publish", json=body)
@@ -300,14 +341,25 @@ class Client:
         return self._post("/v1/model-installs/preview", json=body)
 
     def confirm_install(
-        self, body: Mapping[str, Any], idempotency_key: str | None = None
+        self, body: Mapping[str, Any], idempotency_key: str
     ) -> dict[str, Any]:
         # Only a preview reference is accepted; there is no bypass method.
-        headers = {"Idempotency-Key": idempotency_key} if idempotency_key else None
-        return self._post("/v1/model-installs", json=body, headers=headers)
+        if not idempotency_key.strip():
+            raise ValueError("Idempotency-Key is required")
+        return self._post(
+            "/v1/model-installs", json=body, headers={"Idempotency-Key": idempotency_key}
+        )
 
-    def verify_model(self, model_id: str, body: Mapping[str, Any]) -> dict[str, Any]:
-        return self._post(f"/v1/models/{model_id}/verifications", json=body)
+    def verify_model(
+        self, model_id: str, body: Mapping[str, Any], idempotency_key: str
+    ) -> dict[str, Any]:
+        if not idempotency_key.strip():
+            raise ValueError("Idempotency-Key is required")
+        return self._post(
+            f"/v1/models/{model_id}/verifications",
+            json=body,
+            headers={"Idempotency-Key": idempotency_key},
+        )
 
     # -- jobs -------------------------------------------------------------
     def get_job(self, job_id: str) -> dict[str, Any]:
@@ -316,8 +368,9 @@ class Client:
     def cancel_job(self, job_id: str) -> dict[str, Any]:
         return self._post(f"/v1/jobs/{job_id}/cancel")
 
-    def job_events(self, job_id: str, last_id: int | None = None) -> Iterator[SSEEvent]:
-        return self.subscribe_job(job_id, after=last_id)
+    def job_events(self, job_id: str, last_id: int | None = None) -> Iterator[dict[str, Any]]:
+        params = {"last_event_id": last_id} if last_id is not None else None
+        return iter(self._get(f"/v1/jobs/{job_id}/events", params=params))
 
     def subscribe_answer(self, answer_id: str, after: int | None = None) -> Iterator[SSEEvent]:
         headers = {"Accept": "text/event-stream"}

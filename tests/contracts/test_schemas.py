@@ -15,9 +15,24 @@ from pydantic import TypeAdapter, ValidationError
 
 from qa_contracts.answers import AnswerEvent, SearchRequest
 from qa_contracts.errors import STATUS_BY_CODE, ErrorCode
+from qa_contracts.knowledge import (
+    ChunkProfile,
+    ImportPreviewRequest,
+    ImportRequest,
+    SearchScope,
+    Snapshot,
+    SourceManifest,
+    UploadManifest,
+)
 from qa_contracts.models import DiscoveryRequest, InferencePolicy
 from qa_contracts.operations import JobEvent, Principal  # noqa: F401
-from qa_contracts.selection import AutoSelection, ExplicitSelection, RetrievalSelection
+from qa_contracts.selection import (
+    AutoSelection,
+    ExplicitSelection,
+    ResolvedScope,
+    RetrievalSelection,
+    SelectionResult,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 OPENAPI = ROOT / "docs" / "openapi.json"
@@ -96,6 +111,133 @@ def test_sse_contract_separates_answer_and_job_ids() -> None:
     )
     assert answer.schema_version == 1
     assert "answer_id" in answer.model_dump()
+
+
+def test_event_schema_version_rejects_unsupported_values() -> None:
+    with pytest.raises(ValidationError):
+        AnswerEvent(
+            answer_id="a1", session_id="s1", seq=1,
+            event="answer.completed", schema_version=99,
+        )
+    with pytest.raises(ValidationError):
+        JobEvent(job_id="j1", seq=1, event="job.completed", schema_version=99)
+
+
+def test_import_preview_and_apply_are_separate_contracts() -> None:
+    preview = ImportPreviewRequest(kb_id="kb", source_id="source", mode="mirror")
+    assert preview.mode == "mirror"
+    with pytest.raises(ValidationError):
+        ImportRequest(kb_id="kb", source_id="source", mode="mirror")
+    with pytest.raises(ValidationError):
+        ImportRequest(kb_id="kb", source_id="source", expected_preview_hash="")
+    confirmed = ImportRequest(
+        kb_id="kb", source_id="source", mode="mirror", expected_preview_hash="sha256:preview"
+    )
+    assert confirmed.expected_preview_hash == "sha256:preview"
+
+
+def test_only_a_successful_full_server_scan_can_be_complete() -> None:
+    with pytest.raises(ValidationError):
+        SourceManifest(source_id="source", scan_scope="full", scan_status="succeeded")
+    with pytest.raises(ValidationError):
+        SourceManifest(
+            source_id="source", scan_scope="partial", scan_status="succeeded", complete=True
+        )
+    with pytest.raises(ValidationError):
+        SourceManifest(source_id="source", scan_scope="full", scan_status="failed", complete=True)
+    with pytest.raises(ValidationError):
+        SourceManifest(
+            source_id="source", scan_scope="full", scan_status="succeeded", complete=True,
+            selection={"relative_paths": ["only.md"]},
+        )
+    assert SourceManifest(
+        source_id="source", scan_scope="full", scan_status="succeeded", complete=True
+    ).files == []  # A verified empty full scan can legitimately be complete.
+    with pytest.raises(ValidationError):
+        UploadManifest(source_id="source", complete=True)
+
+
+def test_resolved_scope_requires_unique_versioned_targets() -> None:
+    for targets in ([], [{"kb_id": "kb"}], [
+        {"kb_id": "kb", "version_id": "v1"}, {"kb_id": "kb", "version_id": "v2"},
+    ]):
+        with pytest.raises(ValidationError):
+            ResolvedScope(scope_id="scope", targets=targets)
+    valid = ResolvedScope(scope_id="scope", targets=[{"kb_id": "kb", "version_id": "v1"}])
+    assert valid.targets[0].version_id == "v1"
+
+
+def test_manifest_paths_cannot_escape_selected_root() -> None:
+    paths = (
+        "../outside.txt",
+        "folder/../../outside.txt",
+        "/etc/passwd",
+        "C:/secret.txt",
+        "folder\\\\file.txt",
+    )
+    for path in paths:
+        with pytest.raises(ValidationError):
+            UploadManifest.model_validate({
+                "source_id": "source",
+                "files": [{"relative_path": path, "digest": "sha256:x", "size": 1}],
+            })
+    safe = UploadManifest.model_validate({
+        "source_id": "source",
+        "selection": {"relative_paths": ["docs/install.md"]},
+        "files": [{"relative_path": "docs/install.md", "digest": "sha256:x", "size": 1}],
+    })
+    assert safe.files[0].relative_path == "docs/install.md"
+    assert safe.selection.relative_paths == ["docs/install.md"]
+    with pytest.raises(ValidationError):
+        UploadManifest.model_validate({
+            "source_id": "source",
+            "selection": {"relative_paths": ["docs/other.md"]},
+            "files": [{"relative_path": "docs/install.md", "digest": "sha256:x", "size": 1}],
+        })
+    with pytest.raises(ValidationError):
+        UploadManifest.model_validate({
+            "source_id": "source",
+            "selection": {"relative_paths": ["../outside.md"]},
+            "files": [{"relative_path": "docs/install.md", "digest": "sha256:x", "size": 1}],
+        })
+
+
+def test_chunk_profile_rejects_overlap_at_or_above_target() -> None:
+    with pytest.raises(ValidationError):
+        ChunkProfile(target_tokens=10)
+    with pytest.raises(ValidationError):
+        ChunkProfile(target_tokens=10, overlap_tokens=10)
+    assert ChunkProfile(target_tokens=10, overlap_tokens=9).target_tokens == 10
+
+
+def test_resolved_selection_targets_and_snapshot_index_are_consistent() -> None:
+    for status, targets in (
+        ("resolved", []),
+        ("resolved", [{"kb_id": "kb"}]),
+        ("no_match", [{"kb_id": "kb", "version_id": "v1"}]),
+        ("resolved", [
+            {"kb_id": "kb", "version_id": "v1"},
+            {"kb_id": "kb", "version_id": "v2"},
+        ]),
+    ):
+        with pytest.raises(ValidationError):
+            SelectionResult(status=status, mode="auto", targets=targets)
+    result = SelectionResult(
+        status="resolved", mode="explicit", targets=[{"kb_id": "kb", "version_id": "v1"}]
+    )
+    assert result.targets[0].version_id == "v1"
+
+    with pytest.raises(ValidationError):
+        Snapshot(version_id="v1", kb_id="kb", state="ready")
+    snapshot = Snapshot(
+        version_id="v1", kb_id="kb", state="ready",
+        keyword_profile="zh-v1", keyword_index_ref="sha256:index",
+    )
+    scope = SearchScope(
+        kb_id=snapshot.kb_id, version_id=snapshot.version_id,
+        keyword_profile=snapshot.keyword_profile, index_ref=snapshot.keyword_index_ref,
+    )
+    assert scope.version_id == result.targets[0].version_id
 
 
 def test_event_types_and_terminal_states_match_dto() -> None:

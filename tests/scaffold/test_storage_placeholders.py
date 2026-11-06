@@ -1,11 +1,15 @@
-"""A1 placeholder adapters: typed, side-effect free and honest about 501."""
+"""Adapters that are still placeholders must refuse instead of faking data.
+
+A1 storage adapters (SQLite, blobs, snapshot files) became real in P2-A1 and
+have their own behavioural tests; only the not-yet-implemented ports stay here.
+"""
 
 from __future__ import annotations
 
 import pytest
 
 from qa_contracts.errors import FeatureNotImplemented
-from qa_infrastructure.blobs import FileBlobStore
+from qa_contracts.operations import AccessScope
 from qa_infrastructure.catalog import AuthorizedKnowledgeCatalog
 from qa_infrastructure.indexes import BM25Index, DenseIndex, EmbeddingCache
 from qa_infrastructure.ollama import OllamaDiscovery, OllamaInstaller, OllamaRuntime
@@ -16,17 +20,14 @@ from qa_infrastructure.providers import (
     ConfiguredTokenCounter,
     build_provider,
 )
-from qa_infrastructure.snapshots import FileSnapshotStore, PublishedSnapshotReader
+from qa_infrastructure.snapshots import PublishedSnapshotReader
 from qa_infrastructure.sqlite import SQLiteStore
 
 
 @pytest.mark.parametrize(
     "call",
     [
-        lambda: SQLiteStore.__new__(SQLiteStore).migrate("head"),
-        lambda: FileBlobStore(__import__("pathlib").Path(".")).verify("x"),
-        lambda: FileSnapshotStore(__import__("pathlib").Path(".")).stage([]),
-        lambda: PublishedSnapshotReader().resolve("kb", None),
+        lambda: PublishedSnapshotReader().resolve("kb", None, AccessScope(principal_id="p")),
         lambda: BM25Index().search("q", object(), 5),
         lambda: DenseIndex().search([0.1], object(), 5),
         lambda: EmbeddingCache().get_many([]),

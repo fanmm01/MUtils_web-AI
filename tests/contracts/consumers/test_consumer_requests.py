@@ -12,6 +12,7 @@ import pytest
 from pydantic import ValidationError
 
 from qa_contracts.answers import AskRequest, SearchRequest, SubmitAnswer
+from qa_contracts.knowledge import ImportPreviewRequest, ImportRequest, UploadManifest
 from qa_contracts.models import DiscoveryRequest, InstallConfirmation
 from qa_contracts.selection import SelectionPreviewRequest, UpdateSessionSelection
 from tests.contracts.fixtures import REQUEST_FIXTURES, load_fixture
@@ -22,6 +23,9 @@ MODEL_BY_PATH = {
     "/v1/sessions/session_123/selection": UpdateSessionSelection,
     "/v1/models/discovery": DiscoveryRequest,
     "/v1/model-installs": InstallConfirmation,
+    "/v1/uploads": UploadManifest,
+    "/v1/kbs/kb1/imports/preview": ImportPreviewRequest,
+    "/v1/kbs/kb1/imports": ImportRequest,
     "/v1/knowledge-selection/preview": SelectionPreviewRequest,
     "/v1/sessions/session_123/answers": SubmitAnswer,
 }

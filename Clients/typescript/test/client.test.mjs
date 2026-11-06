@@ -67,4 +67,17 @@ const authed = createClient({
 await authed.getKB("kb");
 assert.equal(authCalls[0].headers.Authorization, "Bearer token-value");
 
+const install = { preview_id: "p1", preview_hash: "h", confirmed: true };
+const beforeJobs = authCalls.length;
+assert.throws(() => authed.confirmInstall(install), /Idempotency-Key is required/);
+assert.throws(
+  () => authed.verifyModel("m1", { roles: ["generator"] }, { idempotencyKey: " " }),
+  /Idempotency-Key is required/,
+);
+assert.equal(authCalls.length, beforeJobs);
+await authed.confirmInstall(install, { idempotencyKey: "install-key" });
+await authed.verifyModel("m1", { roles: ["generator"] }, { idempotencyKey: "verify-key" });
+assert.equal(authCalls.at(-2).headers["Idempotency-Key"], "install-key");
+assert.equal(authCalls.at(-1).headers["Idempotency-Key"], "verify-key");
+
 console.log("typescript scaffold tests passed");

@@ -60,7 +60,8 @@ def test_install_has_no_bypass_confirmation_command() -> None:
 
     no_yes = runner.invoke(
         app,
-        ["models", "install-confirm", "--preview-id", "p1", "--preview-hash", "h"],
+        ["models", "install-confirm", "--preview-id", "p1", "--preview-hash", "h",
+         "--idempotency-key", "install-1"],
     )
     assert no_yes.exit_code != 0
     assert "--yes" in no_yes.output or "requires" in no_yes.output
@@ -109,6 +110,32 @@ def test_json_error_is_machine_readable(
     assert payload["code"] == "FEATURE_NOT_IMPLEMENTED"
     assert payload["request_id"] == "req-cli"
     assert payload["message"] == "not yet"
+
+
+def test_model_job_commands_require_and_forward_idempotency_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded = _mock_client(monkeypatch, 501, {
+        "error": {"code": "FEATURE_NOT_IMPLEMENTED", "message": "not yet", "details": []},
+        "request_id": "req-cli",
+    })
+    for args in (
+        ["models", "install-confirm", "--preview-id", "p1", "--preview-hash", "h", "--yes"],
+        ["models", "verify", "model-1", "--role", "generator"],
+    ):
+        result = runner.invoke(app, args)
+        assert result.exit_code != 0
+        assert "--idempotency-key" in result.output
+    assert recorded == []
+    for args, expected in (
+        (["models", "install-confirm", "--preview-id", "p1", "--preview-hash", "h",
+          "--yes", "--idempotency-key", "install-1"], "install-1"),
+        (["models", "verify", "model-1", "--role", "generator",
+          "--idempotency-key", "verify-1"], "verify-1"),
+    ):
+        result = runner.invoke(app, args)
+        assert result.exit_code != 0  # scaffold business endpoint returns 501
+        assert recorded[-1]["headers"]["idempotency-key"] == expected
 
 
 def test_selection_flags_translate_to_one_union() -> None:

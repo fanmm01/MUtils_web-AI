@@ -1,0 +1,11 @@
+{
+  "schema_version": 2,
+  "method": "POST",
+  "path": "/v1/kbs/kb1/imports",
+  "body": {
+    "kb_id": "kb1",
+    "source_id": "source_1",
+    "mode": "mirror",
+    "expected_preview_hash": "sha256:confirmed-preview"
+  }
+}

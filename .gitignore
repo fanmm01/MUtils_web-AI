@@ -17,6 +17,7 @@ htmlcov/
 node_modules/
 dist/
 *.tsbuildinfo
+tests/frontend/e2e/test-results/
 
 # Environment and secrets
 .env

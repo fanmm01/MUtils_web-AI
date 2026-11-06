@@ -225,7 +225,7 @@ class InstallPreview(ContractModel):
 class InstallConfirmation(ContractModel):
     preview_id: ID
     preview_hash: str
-    confirmed: bool = False
+    confirmed: Literal[True]
 
 
 class InstallPlan(ContractModel):

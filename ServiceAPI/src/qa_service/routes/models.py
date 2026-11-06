@@ -9,9 +9,10 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Header, Query
 
 from qa_contracts.base import Page
+from qa_contracts.errors import ErrorDetail, ValidationFailed
 from qa_contracts.models import (
     DiscoveryReport,
     DiscoveryRequest,
@@ -37,6 +38,12 @@ from ..deps import ContainerDep, PrincipalDep
 from ..services import not_implemented
 
 router = APIRouter(tags=["models"])
+
+
+def _required_key(value: str) -> str:
+    if not value.strip():
+        raise ValidationFailed([ErrorDetail(field="Idempotency-Key", reason="must not be empty")])
+    return value
 
 
 @router.get("/v1/models/capabilities", response_model=ModelCapabilities)
@@ -162,15 +169,26 @@ async def preview_install(
 
 @router.post("/v1/model-installs", response_model=Job, status_code=202)
 async def confirm_install(
-    body: InstallConfirmation, container: ContainerDep, principal: PrincipalDep
+    body: InstallConfirmation,
+    container: ContainerDep,
+    principal: PrincipalDep,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
 ) -> Job:
     # There is no install path in the scaffold, so confirmation cannot succeed
     # even with a well-formed preview reference.
-    return await not_implemented(container, "models", principal, body)
+    return await not_implemented(
+        container, "models", principal, body, _required_key(idempotency_key)
+    )
 
 
 @router.post("/v1/models/{model_id}/verifications", response_model=Job, status_code=202)
 async def verify_model(
-    model_id: str, body: VerifyModelRequest, container: ContainerDep, principal: PrincipalDep
+    model_id: str,
+    body: VerifyModelRequest,
+    container: ContainerDep,
+    principal: PrincipalDep,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
 ) -> Job:
-    return await not_implemented(container, "models", principal, model_id, body)
+    return await not_implemented(
+        container, "models", principal, model_id, body, _required_key(idempotency_key)
+    )

@@ -30,6 +30,8 @@ class AnswerEventSequenceValidator:
         self._inference_revision: int | None = None
         self._binding_id: str | None = None
         self._scope_id: str | None = None
+        self._selection_status: str | None = None
+        self._has_delta = False
         self._seen: set[str] = set()
         self._ready_citations: set[str] = set()
         self._terminal = False
@@ -58,6 +60,8 @@ class AnswerEventSequenceValidator:
         candidate._inference_revision = self._inference_revision
         candidate._binding_id = self._binding_id
         candidate._scope_id = self._scope_id
+        candidate._selection_status = self._selection_status
+        candidate._has_delta = self._has_delta
         candidate._seen = self._seen.copy()
         candidate._ready_citations = self._ready_citations.copy()
         candidate._terminal = self._terminal
@@ -146,13 +150,35 @@ class AnswerEventSequenceValidator:
             status = data.get("status")
             if status not in {"resolved", "no_match", "needs_clarification"}:
                 raise EventSequenceError("selection.resolved requires a valid status")
-            if status == "resolved" and event.scope_id is None:
-                raise EventSequenceError("resolved selection requires scope_id")
-            if status != "resolved" and event.scope_id is not None:
+            if status == "resolved":
+                if event.scope_id is None:
+                    raise EventSequenceError("resolved selection requires scope_id")
+                targets = data.get("targets")
+                if not isinstance(targets, list) or not targets:
+                    raise EventSequenceError("resolved selection requires pinned targets")
+                kb_ids: set[str] = set()
+                for target in targets:
+                    if not isinstance(target, dict):
+                        raise EventSequenceError("resolved selection requires pinned targets")
+                    kb_id = target.get("kb_id")
+                    version_id = target.get("version_id")
+                    if (
+                        not isinstance(kb_id, str) or not kb_id
+                        or not isinstance(version_id, str) or not version_id
+                        or kb_id in kb_ids
+                    ):
+                        raise EventSequenceError(
+                            "resolved selection requires unique pinned targets"
+                        )
+                    kb_ids.add(kb_id)
+            elif event.scope_id is not None:
                 raise EventSequenceError("unresolved selection cannot have scope_id")
             self._scope_id = event.scope_id
+            self._selection_status = status
         elif name == "retrieval.completed":
             self._require("selection.resolved")
+            if "retrieval.completed" in self._seen:
+                raise EventSequenceError("retrieval.completed may appear only once")
             if data.get("status", "completed") != "completed":
                 raise EventSequenceError("retrieval.completed requires completed status")
             if self._scope_id is None:
@@ -179,17 +205,17 @@ class AnswerEventSequenceValidator:
                 for citation_id in citation_ids
             ):
                 raise EventSequenceError("answer.delta may reference only ready citations")
+            self._has_delta = True
         elif name == "answer.completed":
             self._require("retrieval.completed")
+            if not self._has_delta:
+                raise EventSequenceError("answer.completed requires a verified answer.delta")
         elif name == "answer.refused":
             self._require("inference.bound")
             if "selection.resolved" not in self._seen:
                 raise EventSequenceError("answer.refused requires a selection decision")
-            if self._scope_id is None and data.get("reason") not in {
-                "no_match",
-                "needs_clarification",
-            }:
-                raise EventSequenceError("unresolved selection refusal requires a routing reason")
+            if self._scope_id is None and data.get("reason") != self._selection_status:
+                raise EventSequenceError("unresolved refusal reason must match selection status")
             if self._scope_id is not None and "retrieval.completed" not in self._seen:
                 raise EventSequenceError("resolved-scope refusal requires retrieval")
         elif name in {"answer.failed", "answer.cancelled"}:

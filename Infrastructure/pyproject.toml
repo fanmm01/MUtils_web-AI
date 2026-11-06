@@ -12,5 +12,8 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/qa_infrastructure"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"migrations" = "qa_infrastructure/migrations"
+
 [tool.uv.sources]
 qa-contracts = { workspace = true }

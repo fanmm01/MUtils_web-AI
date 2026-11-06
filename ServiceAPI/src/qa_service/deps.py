@@ -8,6 +8,7 @@ from fastapi import Depends, Request, Response
 
 from qa_contracts.operations import AccessScope, Principal
 
+from .business import BusinessServices, require_services
 from .container import Container
 
 
@@ -19,23 +20,38 @@ ContainerDep = Annotated[Container, Depends(get_container)]
 
 
 def get_principal(request: Request) -> Principal:
-    """Scaffold identity.
+    """Identity for the single-user deployment.
 
-    No credentials are validated in P1 and no business route can succeed, so
-    this must never be mistaken for authentication. It exists so handlers have
-    the right shape for P2.
+    P2-A1 still has no credential validation; every business call is restricted
+    to the server operator and no request can widen its scope. Authentication is
+    a later-phase concern and must not be assumed from this placeholder.
     """
-    return Principal(principal_id="scaffold-anonymous", display_name="scaffold", is_admin=False)
+    return Principal(principal_id="local-operator", display_name="local operator", is_admin=True)
 
 
 PrincipalDep = Annotated[Principal, Depends(get_principal)]
 
 
-def scaffold_scope() -> AccessScope:
-    return AccessScope(principal_id="scaffold-anonymous")
+def scaffold_scope(request: Request) -> AccessScope:
+    container: Container = request.app.state.container
+    return AccessScope(
+        principal_id="local-operator",
+        kb_ids=list(container.authorized_kb_ids),
+        can_manage_kb=True,
+    )
 
 
 ScopeDep = Annotated[AccessScope, Depends(scaffold_scope)]
+
+
+async def services_for(container: Container) -> BusinessServices:
+    """A1 services, resolved *inside* a handler.
+
+    It must not run as a FastAPI dependency: a dependency failure would mask
+    request-body validation, and an invalid body must be a 422, never a 501.
+    501 (scaffold mode) and 503 (no database) are raised after validation.
+    """
+    return await require_services(container)
 
 
 def echo_request_id(request: Request, response: Response) -> None:

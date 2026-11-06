@@ -82,3 +82,16 @@ uv run python scripts/check_distribution.py --check
 ## 9. 分发检查
 
 `scripts/check_distribution.py` 扫描 Git 追踪文件、指定的分发目录，按扩展名（`.gguf/.safetensors/.bin/...`）、路径（`models/`、`.ollama/` 等）和体积标记可疑文件。它只是防误打包的启发式检查，不能替代许可证审查。
+
+## 10. P2-A1 运营步骤（确定性业务）
+
+1. 配置环境：`QA_MODE=operational`、`QA_DATA_DIR`、`QA_CHUNK_TARGET_TOKENS` 与 `QA_CHUNK_OVERLAP_TOKENS`（无隐式默认，须由真实语料分析确定）。
+2. 显式迁移（导入/启动都不会建库）：`uv run python -m qa_service.migrate --target head`。
+3. 启动 API：`uv run qa-api`；后台导入：`uv run qa-worker`（或 `--once` 单轮）。
+4. 本地目录来源：`QA_SOURCE_ROOTS` 只允许服务端授权 `root_id`；同源 `source_id` 使用 `kind=local_root` + `root_id`，导入时服务端自行扫描，客户端不提交路径。
+5. 上传来源：`kind=upload`；客户端 `PUT /v1/uploads/{batch}/files?relative_path=...` 的字节必须与清单摘要、大小一致，`complete` 只在全部匹配时返回 `complete=true`。
+6. 预览与确认：`POST /v1/kbs/{kb}/imports/preview` 得到 `preview_hash`，再 `POST /v1/kbs/{kb}/imports`；预览后文件变化返回 409。
+7. 版本：导入任务成功后产生 `ready` 快照，`POST /v1/versions/{id}/publish`（或 `/v1/kbs/{id}/publish`）以 `expected_active_version_id` 比较交换；失败或冲突不切换活动版本；`rollback` 同样基于已校验的旧快照。
+8. 任务事件：`GET /v1/jobs/{id}/events` 目前返回持久化 JSON 事件（同样的 `seq` 可重放）；SSE 流式在 P3。
+
+尚未验收：`.doc` 转换需要本机 LibreOffice；扫描 PDF 的 OCR 尚未配置（分别返回 `CONVERSION_UNAVAILABLE` / `OCR_REQUIRED` / `OCR_UNAVAILABLE`，不会当空成功）。检索、选库、问答仍为 A2/P3。

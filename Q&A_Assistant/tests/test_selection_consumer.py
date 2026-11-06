@@ -1,5 +1,7 @@
 """Selection and retrieval consumer-contract tests use no provider or storage."""
 
+from typing import get_type_hints
+
 import pytest
 from pydantic import ValidationError
 
@@ -28,6 +30,23 @@ def test_selection_contract_rejects_empty_or_duplicate_targets() -> None:
         AutoSelection(candidate_kb_ids=[])
 
 
+def test_keyword_retrieval_requires_explicit_top_k() -> None:
+    assert get_type_hints(HybridRetriever.retrieve)["k"] is int
+    assert get_type_hints(FederatedRetriever.retrieve)["k"] is int
+    assert HybridRetriever.retrieve.__defaults__ is None
+    assert FederatedRetriever.retrieve.__defaults__ is None
+
+
+def test_p2_keyword_consumers_do_not_require_model_roles() -> None:
+    hybrid = HybridRetriever(keyword_reader=object())
+    federated = FederatedRetriever(retriever=hybrid, snapshots=object())
+    router = KnowledgeRouter(catalog=object(), snapshots=object(), retriever=hybrid)
+    assert hybrid._vector_reader is None
+    assert hybrid._embedder is None
+    assert federated._reranker is None
+    assert router._reranker is None
+
+
 @pytest.mark.asyncio
 async def test_router_and_retrievers_never_fabricate_results() -> None:
     router = KnowledgeRouter(
@@ -39,11 +58,13 @@ async def test_router_and_retrievers_never_fabricate_results() -> None:
     hybrid = HybridRetriever(
         keyword_reader=object(), vector_reader=object(), embedder=object()
     )
-    federated = FederatedRetriever(retriever=hybrid, embedder=object(), reranker=object())
+    federated = FederatedRetriever(
+        retriever=hybrid, snapshots=object(), embedder=object(), reranker=object()
+    )
 
     with pytest.raises(FeatureNotImplemented):
         await router.rank_candidates("question", [], object())
     with pytest.raises(FeatureNotImplemented):
-        await hybrid.retrieve("question", object(), object())
+        await hybrid.retrieve("question", object(), object(), k=13)
     with pytest.raises(FeatureNotImplemented):
-        await federated.retrieve("question", object(), object())
+        await federated.retrieve("question", object(), object(), k=17)

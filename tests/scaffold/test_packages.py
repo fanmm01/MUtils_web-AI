@@ -98,6 +98,8 @@ def test_contracts_package_is_lightweight() -> None:
     from qa_contracts import answers, knowledge, models, operations, repositories, selection  # noqa: F401
 
     assert qa_contracts.SCHEMA_VERSION == 1
+    assert qa_contracts.EVENT_SCHEMA_VERSION == 1
+    assert qa_contracts.HTTP_SCHEMA_VERSION == 2
     source = "\n".join(
         path.read_text(encoding="utf-8") for path in _python_files("qa_contracts")
     )

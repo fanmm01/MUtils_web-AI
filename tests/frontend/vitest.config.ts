@@ -8,7 +8,10 @@ const repo = fileURLToPath(new URL("../../", import.meta.url));
 export default defineConfig({
   root: repo,
   resolve: {
-    alias: { "@qa/client": `${repo}Clients/typescript/src/index.ts` },
+    alias: {
+      "@qa/client": `${repo}Clients/typescript/src/index.ts`,
+      "@qa/widget": `${repo}WebWidget/src/index.ts`,
+    },
   },
   test: {
     include: ["tests/frontend/**/*.spec.ts"],

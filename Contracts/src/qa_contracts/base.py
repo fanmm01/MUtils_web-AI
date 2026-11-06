@@ -11,8 +11,12 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
 
-#: Bumped only by a Contract Gate when a breaking change is frozen.
-SCHEMA_VERSION = 1
+#: The P2 Gate changes HTTP request/response DTOs incompatibly with the P1 baseline.
+HTTP_SCHEMA_VERSION = 2
+#: Persisted SSE events retain their P1 wire format and remain replayable.
+EVENT_SCHEMA_VERSION = 1
+#: Compatibility alias for existing event validators and consumers.
+SCHEMA_VERSION = EVENT_SCHEMA_VERSION
 
 #: Opaque server-generated identifier.
 ID = Annotated[str, Field(min_length=1, max_length=256)]

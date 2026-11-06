@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
+
 import httpx
 import pytest
 
 from qa_client import Client, QAError
+from qa_client.files import collect_upload, upload_directory
 from qa_client.sse import decode_sse, resume_cursor
 
 
@@ -67,6 +70,107 @@ def test_install_preview_then_confirm_only() -> None:
     assert seen == ["POST /v1/model-installs/preview", "POST /v1/model-installs"]
     assert not hasattr(client, "pull_model")
     assert not hasattr(client, "start_download")
+
+
+def test_model_job_clients_send_required_idempotency_header() -> None:
+    seen: list[tuple[str, str | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.url.path, request.headers.get("Idempotency-Key")))
+        return httpx.Response(501, json={
+            "error": {"code": "FEATURE_NOT_IMPLEMENTED", "message": "not yet", "details": []},
+            "request_id": "r",
+        })
+
+    client = _client(handler)
+    for call in (
+        lambda: client.confirm_install(
+            {"preview_id": "p1", "preview_hash": "h", "confirmed": True}, "install-1"
+        ),
+        lambda: client.verify_model("model-1", {"roles": ["generator"]}, "verify-1"),
+    ):
+        with pytest.raises(QAError):
+            call()
+    assert seen == [
+        ("/v1/model-installs", "install-1"),
+        ("/v1/models/model-1/verifications", "verify-1"),
+    ]
+    with pytest.raises(ValueError, match="required"):
+        client.verify_model("model-1", {"roles": ["generator"]}, " ")
+    assert len(seen) == 2
+
+
+def test_upload_rejects_symlinks_before_any_network_request(tmp_path) -> None:
+    root = tmp_path / "upload"
+    root.mkdir()
+    outside = tmp_path / "private.txt"
+    outside.write_text("outside root", encoding="utf-8")
+    try:
+        (root / "link.txt").symlink_to(outside)
+    except (NotImplementedError, OSError):
+        pytest.skip("creating file symlinks requires unavailable privileges")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        pytest.fail(f"unexpected upload request: {request.method} {request.url}")
+
+    with pytest.raises(ValueError, match="symlinks"):
+        upload_directory(_client(handler), root, source_id="source-1")
+
+
+def test_upload_rejects_symlink_even_without_link_privileges(tmp_path, monkeypatch) -> None:
+    root = tmp_path / "upload"
+    root.mkdir()
+    (root / "doc.md").write_text("document", encoding="utf-8")
+    original_is_symlink = type(root).is_symlink
+
+    def marked_symlink(path):
+        return path.name == "doc.md" or original_is_symlink(path)
+
+    monkeypatch.setattr(type(root), "is_symlink", marked_symlink)
+    with pytest.raises(ValueError, match="symlinks"):
+        collect_upload(root)
+
+
+def test_upload_posts_manifest_and_stops_after_failed_file_put(tmp_path) -> None:
+    root = tmp_path / "upload"
+    root.mkdir()
+    (root / "doc.md").write_text("document", encoding="utf-8")
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(f"{request.method} {request.url.path}")
+        if request.url.path == "/v1/uploads":
+            body = request.content.decode("utf-8")
+            import json
+
+            manifest = json.loads(body)
+            assert set(manifest) == {"source_id", "selection", "files"}
+            assert manifest["selection"] == {}
+            assert manifest["source_id"] == "source-1"
+            assert manifest["files"] == [{
+                "relative_path": "doc.md",
+                "digest": hashlib.sha256(b"document").hexdigest(),
+                "size": 8,
+            }]
+            return httpx.Response(202, json={"batch_id": "batch-1"})
+        assert request.url.params["relative_path"] == "doc.md"
+        assert request.content == b"document"
+        return httpx.Response(501, json={
+            "error": {"code": "FEATURE_NOT_IMPLEMENTED", "message": "not yet", "details": []},
+            "request_id": "req-1",
+        })
+
+    with pytest.raises(QAError, match="not yet"):
+        upload_directory(_client(handler), root, source_id="source-1")
+    assert calls == ["POST /v1/uploads", "PUT /v1/uploads/batch-1/files"]
+
+
+def test_upload_rejects_missing_requested_files(tmp_path) -> None:
+    root = tmp_path / "upload"
+    root.mkdir()
+    (root / "doc.md").write_text("document", encoding="utf-8")
+    with pytest.raises(ValueError, match="not found"):
+        collect_upload(root, ["missing.txt"])
 
 
 def test_sse_handles_utf8_split_and_heartbeat() -> None:
