@@ -89,6 +89,13 @@ const CALLS = {
   previewImport: (c) => c.previewImport("kb1", { kb_id: "kb1", source_id: "s1" }),
   importDocuments: (c) =>
     c.importDocuments("kb1", { kb_id: "kb1", source_id: "s1", expected_preview_hash: "h" }),
+  resolveImportConflicts: (c) => c.resolveImportConflicts("kb1", "prev1", {
+    kb_id: "kb1", source_id: "s1", preview_id: "prev1", expected_preview_hash: "h",
+    expected_active_version_id: null,
+    decisions: [{ strategy: "keep_manual", source_id: "s1", relative_path: "a.md",
+      document_id: "d1", source_baseline_revision_id: "r1", manual_revision_id: "r2",
+      source_baseline_digest: "sha256:before" }],
+  }, key),
   listVersions: (c) => c.listVersions("kb1"),
   getVersion: (c) => c.getVersion("v1"),
   diffVersions: (c) => c.diffVersions("kb1", "v1", "v2"),
@@ -166,6 +173,7 @@ const EXPECTED_OPERATIONS = {
   completeUpload: "complete_upload_v1_uploads__batch_id__complete_post",
   previewImport: "preview_import_v1_kbs__kb_id__imports_preview_post",
   importDocuments: "import_documents_v1_kbs__kb_id__imports_post",
+  resolveImportConflicts: "resolve_import_conflicts_v1_kbs__kb_id__imports__preview_id__resolve_post",
   listVersions: "list_versions_v1_kbs__kb_id__versions_get",
   getVersion: "get_version_v1_versions__version_id__get",
   diffVersions: "diff_versions_v1_kbs__kb_id__version_diff_get",

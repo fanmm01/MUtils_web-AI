@@ -45,7 +45,8 @@ def test_preview_is_non_destructive_and_apply_requires_preview_hash() -> None:
 def test_exported_events_retain_version_one_and_terminal_states() -> None:
     artifact = json.loads((ROOT / "docs/events.schema.json").read_text(encoding="utf-8"))
     assert artifact["schema_version"] == 1
-    assert artifact["http_schema_version"] == 2
+    assert artifact["legacy_schema_version"] == 1
+    assert artifact["latest_schema_version"] == 2
     assert artifact["answer_event"]["properties"]["schema_version"]["const"] == 1
     assert set(artifact["answer_events"]["terminal"]) == {
         "answer.completed", "answer.refused", "answer.failed", "answer.cancelled"

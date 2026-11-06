@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import AwareDatetime, Field, field_validator, model_validator
 
 from .base import ID, ContractModel, utc_now
+from .models import EmbeddingProfile
 
 
 class ContentKind(StrEnum):
@@ -244,6 +245,8 @@ class Snapshot(ContractModel):
     keyword_index_ref: str | None = None
     embedding_profile: str | None = None
     vector_index: Literal["present", "absent"] = "absent"
+    vector_index_ref: str | None = None
+    embedding_fingerprint: EmbeddingProfile | None = None
     created_at: AwareDatetime = Field(default_factory=utc_now)
 
     @model_validator(mode="after")
@@ -252,6 +255,17 @@ class Snapshot(ContractModel):
             self.keyword_profile and self.keyword_index_ref
         ):
             raise ValueError("ready snapshots require a keyword index and profile")
+        if self.vector_index == "present" and not (
+            self.vector_index_ref and self.embedding_fingerprint
+        ):
+            raise ValueError("a vector index requires an immutable ref and embedding fingerprint")
+        if self.vector_index == "present":
+            assert self.embedding_fingerprint is not None
+            self.embedding_fingerprint.fingerprint()
+        if self.vector_index == "absent" and (
+            self.vector_index_ref is not None or self.embedding_fingerprint is not None
+        ):
+            raise ValueError("keyword-only snapshots cannot claim vector artifacts")
         return self
 
 
@@ -264,6 +278,16 @@ class SearchScope(ContractModel):
     keyword_profile: str = Field(min_length=1)
     index_ref: str = Field(min_length=1)
     embedding_profile: str | None = None
+    vector_index_ref: str | None = None
+    embedding_fingerprint: EmbeddingProfile | None = None
+
+    @model_validator(mode="after")
+    def _vector_scope_is_complete(self) -> SearchScope:
+        if (self.vector_index_ref is None) != (self.embedding_fingerprint is None):
+            raise ValueError("vector scope requires both index ref and embedding fingerprint")
+        if self.embedding_fingerprint is not None:
+            self.embedding_fingerprint.fingerprint()
+        return self
 
 
 class CreateKB(ContractModel):
@@ -304,6 +328,26 @@ class ImportPreviewRequest(ContractModel):
 
 class ImportRequest(ImportPreviewRequest):
     expected_preview_hash: str = Field(min_length=1)
+    # Absent for legacy callers: a conflicted import still fails closed with 409.
+    resolution_id: ID | None = None
+
+
+class ImportConflict(ContractModel):
+    """Server-observed identity of one source/manual revision conflict."""
+
+    source_id: ID
+    relative_path: str = Field(min_length=1)
+    document_id: ID
+    source_baseline_digest: str = Field(min_length=1)
+    incoming_source_digest: str | None = None
+    source_baseline_revision_id: ID
+    manual_revision_id: ID
+
+    @field_validator("relative_path")
+    @classmethod
+    def _safe_path(cls, value: str) -> str:
+        _validate_relative_path(value)
+        return value
 
 
 class ImportPreview(ContractModel):
@@ -314,7 +358,89 @@ class ImportPreview(ContractModel):
     modified: list[str] = Field(default_factory=list)
     removed: list[str] = Field(default_factory=list)
     conflicts: list[str] = Field(default_factory=list)
+    # Additive: old clients continue to read the path-only conflicts above.
+    conflict_details: list[ImportConflict] = Field(default_factory=list)
     created_at: AwareDatetime = Field(default_factory=utc_now)
+
+
+class ConflictDecisionBase(ContractModel):
+    source_id: ID
+    relative_path: str = Field(min_length=1)
+    document_id: ID
+    source_baseline_revision_id: ID
+    manual_revision_id: ID
+    source_baseline_digest: str = Field(min_length=1)
+    incoming_source_digest: str | None = None
+
+    @field_validator("relative_path")
+    @classmethod
+    def _safe_path(cls, value: str) -> str:
+        _validate_relative_path(value)
+        return value
+
+
+class KeepManual(ConflictDecisionBase):
+    """Retain the manual revision and record the source divergence."""
+
+    strategy: Literal["keep_manual"] = "keep_manual"
+
+
+class UseSource(ConflictDecisionBase):
+    """Restore source ownership; keep the previous revision for old citations."""
+
+    strategy: Literal["use_source"] = "use_source"
+
+
+class ForkDocument(ConflictDecisionBase):
+    """Fork the manual copy; server allocates the new document ID."""
+
+    strategy: Literal["fork_document"] = "fork_document"
+
+
+ConflictDecision = Annotated[KeepManual | UseSource | ForkDocument, Field(discriminator="strategy")]
+
+
+class ResolveImportConflicts(ContractModel):
+    kb_id: ID
+    source_id: ID
+    preview_id: ID
+    expected_preview_hash: str = Field(min_length=1)
+    # Explicit null means that the preview observed no published version.
+    expected_active_version_id: ID | None = Field(...)
+    decisions: list[ConflictDecision] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _unique_conflicts(self) -> ResolveImportConflicts:
+        keys = [(item.source_id, item.relative_path) for item in self.decisions]
+        if len(set(keys)) != len(keys):
+            raise ValueError("each source path may have only one decision")
+        if any(item.source_id != self.source_id for item in self.decisions):
+            raise ValueError("every conflict decision must belong to the preview source")
+        return self
+
+
+class ImportResolution(ContractModel):
+    """An immutable decision reference, not proof that apply already ran."""
+
+    resolution_id: ID
+    kb_id: ID
+    preview_id: ID
+    preview_hash: str
+    source_id: ID
+    principal_id: ID
+    request_hash: str = Field(min_length=1)
+    expires_at: AwareDatetime
+    expected_active_version_id: ID | None = None
+    decisions: list[ConflictDecision] = Field(min_length=1)
+    created_at: AwareDatetime = Field(default_factory=utc_now)
+
+
+class VersionDiff(ContractModel):
+    left: ID
+    right: ID
+    added: list[ID] = Field(default_factory=list)
+    modified: list[ID] = Field(default_factory=list)
+    removed: list[ID] = Field(default_factory=list)
 
 
 class ChangeSet(ContractModel):

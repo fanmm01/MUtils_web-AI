@@ -3,22 +3,30 @@
 from __future__ import annotations
 
 import tempfile
+from typing import Annotated
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Header, Request
 
-from qa_contracts.errors import ErrorDetail, ValidationFailed
+from qa_contracts.errors import (
+    ErrorDetail,
+    FeatureNotImplemented,
+    PermissionDenied,
+    ValidationFailed,
+)
 from qa_contracts.knowledge import (
     ChangeReceipt,
     ImportPreview,
     ImportPreviewRequest,
     ImportRequest,
+    ImportResolution,
+    ResolveImportConflicts,
     Selection,
     SourceManifest,
     UploadBatch,
     UploadManifest,
 )
 
-from ..deps import ContainerDep, services_for
+from ..deps import ContainerDep, PrincipalDep, services_for
 
 router = APIRouter(tags=["imports"])
 
@@ -34,7 +42,20 @@ async def begin_upload(manifest: UploadManifest, container: ContainerDep) -> Upl
     return await services.uploads.begin(manifest)
 
 
-@router.put("/v1/uploads/{batch_id}/files", status_code=202)
+@router.put(
+    "/v1/uploads/{batch_id}/files",
+    status_code=202,
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/octet-stream": {
+                    "schema": {"type": "string", "format": "binary"}
+                }
+            },
+        }
+    },
+)
 async def upload_file(
     batch_id: str,
     relative_path: str,
@@ -74,11 +95,40 @@ async def preview_import(
     return await services.imports.preview(body, manifest)
 
 
+@router.post(
+    "/v1/kbs/{kb_id}/imports/{preview_id}/resolve",
+    response_model=ImportResolution,
+    status_code=200,
+)
+async def resolve_import_conflicts(
+    kb_id: str,
+    preview_id: str,
+    body: ResolveImportConflicts,
+    container: ContainerDep,
+    principal: PrincipalDep,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+) -> ImportResolution:
+    """P3 Gate wire contract only; the A1 atomic resolver is not implemented."""
+    _require_kb(kb_id, body.kb_id)
+    if preview_id != body.preview_id:
+        raise ValidationFailed([ErrorDetail(field="preview_id", reason="must match the URL")])
+    if not idempotency_key.strip():
+        raise ValidationFailed(
+            [ErrorDetail(field="Idempotency-Key", reason="must not be empty")]
+        )
+    if not principal.is_admin:
+        raise PermissionDenied("resolve import conflicts")
+    del container
+    raise FeatureNotImplemented("import conflict resolution")
+
+
 @router.post("/v1/kbs/{kb_id}/imports", response_model=ChangeReceipt, status_code=202)
 async def import_documents(
     kb_id: str, body: ImportRequest, container: ContainerDep
 ) -> ChangeReceipt:
     _require_kb(kb_id, body.kb_id)
+    if body.resolution_id is not None:
+        raise FeatureNotImplemented("import conflict resolution")
     services = await services_for(container)
     manifest = await _manifest_for(services, body)
     job = await services.imports.apply(body, manifest)

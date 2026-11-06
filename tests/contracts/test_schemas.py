@@ -240,6 +240,54 @@ def test_resolved_selection_targets_and_snapshot_index_are_consistent() -> None:
     assert scope.version_id == result.targets[0].version_id
 
 
+def test_p3_openapi_exports_real_error_binary_replay_and_reserved_sse() -> None:
+    schema = json.loads(OPENAPI.read_text(encoding="utf-8"))
+    components = schema["components"]["schemas"]
+    assert {
+        "APIErrorResponse", "ErrorBody", "ErrorDetail", "VersionDiff", "JobEventEnvelope"
+    } <= set(components)
+    for path, operations in schema["paths"].items():
+        for operation in operations.values():
+            responses = operation["responses"]
+            for status in ("401", "403", "404", "409", "410", "422", "429", "500", "501"):
+                if status == "503" and path == "/readyz":
+                    continue
+                assert responses[status]["content"]["application/json"]["schema"] == {
+                    "$ref": "#/components/schemas/APIErrorResponse"
+                }
+    assert schema["paths"]["/readyz"]["get"]["responses"]["503"]["content"][
+        "application/json"
+    ]["schema"]["$ref"] == "#/components/schemas/Readiness"
+    upload = schema["paths"]["/v1/uploads/{batch_id}/files"]["put"]
+    assert upload["requestBody"]["content"]["application/octet-stream"]["schema"][
+        "format"
+    ] == "binary"
+    job = schema["paths"]["/v1/jobs/{job_id}/events"]["get"]
+    assert job["responses"]["200"]["content"]["application/json"]["schema"]["items"] == {
+        "$ref": "#/components/schemas/JobEventEnvelope"
+    }
+    assert "text/event-stream" in job["responses"]["200"]["content"]
+    assert "text/event-stream" in schema["paths"]["/v1/answers/{answer_id}/events"][
+        "get"
+    ]["responses"]["200"]["content"]
+    assert schema["paths"]["/v1/kbs/{kb_id}/version-diff"]["get"]["responses"][
+        "200"
+    ]["content"]["application/json"]["schema"]["$ref"] == "#/components/schemas/VersionDiff"
+
+
+def test_p3_events_advertise_versions_without_changing_legacy_v1() -> None:
+    artifact = json.loads(EVENTS.read_text(encoding="utf-8"))
+    assert artifact["schema_version"] == 1
+    assert artifact["legacy_schema_version"] == 1
+    assert artifact["latest_schema_version"] == 2
+    assert artifact["available_versions"] == {"answer": [1, 2], "job": [1, 2]}
+    assert artifact["answer_event"]["properties"]["schema_version"]["const"] == 1
+    assert artifact["job_event"]["properties"]["schema_version"]["const"] == 1
+    assert "job.cancel_requested" not in artifact["event_types"]["job"]
+    assert "job.cancel_requested" in artifact["event_types_v2"]["job"]
+    assert artifact["answer_event_v2"]["discriminator"]["propertyName"] == "event"
+
+
 def test_event_types_and_terminal_states_match_dto() -> None:
     events = json.loads(EVENTS.read_text(encoding="utf-8"))
     answer_events = set(events["event_types"]["answer"])

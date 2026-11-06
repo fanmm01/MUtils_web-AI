@@ -105,7 +105,15 @@ async def get_citation(
     return await not_implemented(container, "ask", principal, answer_id, citation_id)
 
 
-@router.get("/v1/answers/{answer_id}/events")
+@router.get(
+    "/v1/answers/{answer_id}/events",
+    responses={
+        200: {
+            "description": "Reserved P3 answer SSE; this build returns 501",
+            "content": {"text/event-stream": {"schema": {"type": "string"}}},
+        }
+    },
+)
 async def answer_events(
     answer_id: str,
     request: Request,

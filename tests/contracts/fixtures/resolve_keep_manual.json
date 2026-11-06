@@ -1,0 +1,23 @@
+{
+  "schema_version": 2,
+  "method": "POST",
+  "path": "/v1/kbs/kb1/imports/prev1/resolve",
+  "headers": {"Idempotency-Key": "resolve-key"},
+  "body": {
+    "kb_id": "kb1",
+    "source_id": "src1",
+    "preview_id": "prev1",
+    "expected_preview_hash": "sha256:preview",
+    "expected_active_version_id": "v1",
+    "decisions": [{
+      "strategy": "keep_manual",
+      "source_id": "src1",
+      "relative_path": "a.md",
+      "document_id": "doc1",
+      "source_baseline_revision_id": "rev_source",
+      "manual_revision_id": "rev_manual",
+      "source_baseline_digest": "sha256:before",
+      "incoming_source_digest": "sha256:after"
+    }]
+  }
+}

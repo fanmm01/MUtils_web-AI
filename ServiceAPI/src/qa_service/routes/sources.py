@@ -11,6 +11,7 @@ from qa_contracts.knowledge import (
     Snapshot,
     Source,
     SourceManifest,
+    VersionDiff,
 )
 
 from ..business import source_root
@@ -75,10 +76,10 @@ async def get_version(version_id: str, container: ContainerDep) -> Snapshot:
     return await services.versions.get(version_id)
 
 
-@router.get("/v1/kbs/{kb_id}/version-diff")
+@router.get("/v1/kbs/{kb_id}/version-diff", response_model=VersionDiff)
 async def diff_versions(
     kb_id: str, left: str, right: str, container: ContainerDep
-) -> dict[str, object]:
+) -> VersionDiff:
     services = await services_for(container)
     difference = await services.versions.diff(left, right)
     versions = await services.versions.list(kb_id)
@@ -91,13 +92,10 @@ async def diff_versions(
         raise ValidationFailed(
             [ErrorDetail(field="right", reason="version does not belong to the URL knowledge base")]
         )
-    return {
-        "left": difference.left,
-        "right": difference.right,
-        "added": difference.added,
-        "modified": difference.modified,
-        "removed": difference.removed,
-    }
+    return VersionDiff(
+        left=difference.left, right=difference.right,
+        added=difference.added, modified=difference.modified, removed=difference.removed,
+    )
 
 
 @router.post("/v1/versions/{version_id}/publish", response_model=Snapshot)

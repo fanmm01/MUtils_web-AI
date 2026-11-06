@@ -36,6 +36,9 @@ REQUEST_FIXTURES = (
     "upload_manifest_partial.json",
     "import_preview_mirror.json",
     "import_confirm_mirror.json",
+    "resolve_keep_manual.json",
+    "resolve_use_source.json",
+    "resolve_fork_document.json",
 )
 
 FORBIDDEN_DISCOVERY_FIXTURES = (

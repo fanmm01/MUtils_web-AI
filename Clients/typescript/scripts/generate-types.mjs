@@ -60,8 +60,25 @@ function eventsDocument(events) {
     if (name in schemas) throw new Error(`events schema: duplicate schema name ${name}`);
     schemas[name] = rest;
   };
+  const prefixRefs = (schema, prefix) => {
+    const text = JSON.stringify(schema).replaceAll('"#/$defs/', `"#/$defs/${prefix}_`);
+    return JSON.parse(text);
+  };
+  // The v1 and v2 DTOs reuse Python names but have different wire constraints.
+  // Namespace their local definitions before hoisting into the common TS file.
+  const versioned = (name, schema) => {
+    const { $defs = {}, ...rest } = prefixRefs(schema, name);
+    for (const [defName, def] of Object.entries($defs)) {
+      const key = `${name}_${defName}`;
+      if (key in schemas) throw new Error(`events schema: duplicate $defs name ${key}`);
+      schemas[key] = def;
+    }
+    schemas[name] = rest;
+  };
   hoist("AnswerEvent", events.answer_event);
   hoist("JobEvent", events.job_event);
+  if (events.answer_event_v2) versioned("AnswerEventV2", events.answer_event_v2);
+  if (events.job_event_v2) versioned("JobEventV2", events.job_event_v2);
   const rewritten = JSON.parse(
     JSON.stringify(schemas).replaceAll('"#/$defs/', '"#/components/schemas/'),
   );
@@ -86,8 +103,10 @@ async function render() {
     "",
     "/** Stable error codes (events.schema.json `error_codes`). */",
     `export type ErrorCode = ${literalUnion(Object.keys(events.error_codes))};`,
-    "/** SSE event schema version and HTTP contract version of the frozen artifacts. */",
-    `export type EventSchemaVersion = ${JSON.stringify(events.schema_version)};`,
+    "/** Persisted event schema versions (old v1 replay and new v2 contract). */",
+    `export type EventSchemaVersion = ${literalUnion(
+      [...new Set([...events.available_versions.answer, ...events.available_versions.job])]
+    )};`,
     `export type HttpSchemaVersion = ${JSON.stringify(events.http_schema_version)};`,
     "",
   ].join("\n");

@@ -9,10 +9,19 @@ from __future__ import annotations
 from contextlib import AbstractAsyncContextManager
 from typing import Protocol
 
-from .answers import Answer, AnswerEvent, SubmitAnswer, Turn
+from .answers import Answer, AnswerEvent, AnswerEventV2, SubmitAnswer, Turn
 from .base import ID, Page
-from .knowledge import KnowledgeBase, Revision, Snapshot, Source, SourceManifest
+from .knowledge import (
+    ImportResolution,
+    KnowledgeBase,
+    ResolveImportConflicts,
+    Revision,
+    Snapshot,
+    Source,
+    SourceManifest,
+)
 from .models import (
+    AccessScope,
     BindingOwner,
     CallResult,
     DiscoveryReport,
@@ -28,7 +37,7 @@ from .models import (
     TransferState,
     UsageSummary,
 )
-from .operations import AccessScope, Feedback, Issue, Job, JobCommand, JobEvent, Principal
+from .operations import Feedback, Issue, Job, JobCommand, JobEvent, JobEventV2, Principal
 from .selection import (
     HistoryPolicy,
     PreparedSelection,
@@ -73,6 +82,21 @@ class ContentRepository(Protocol):
     async def append_revision(
         self, document_id: ID, revision: Revision, expected_revision: ID | None
     ) -> Revision: ...
+
+
+class ImportResolutionRepository(Protocol):
+    """Persist one authorized, immutable decision set for a confirmed preview."""
+
+    async def resolve_authorized(
+        self,
+        request: ResolveImportConflicts,
+        access: AccessScope,
+        idempotency_key: str,
+    ) -> ImportResolution: ...
+
+    async def get_authorized(
+        self, resolution_id: ID, principal_id: ID, kb_id: ID, source_id: ID,
+    ) -> ImportResolution: ...
 
 
 class SnapshotRepository(Protocol):
@@ -136,9 +160,13 @@ class ConversationRepository(Protocol):
         self, answer_id: ID, result: SelectionResult, expected_state: str
     ) -> Answer: ...
 
-    async def append_event(self, answer_id: ID, event: AnswerEvent) -> AnswerEvent: ...
+    async def append_event(
+        self, answer_id: ID, event: AnswerEvent | AnswerEventV2
+    ) -> AnswerEvent | AnswerEventV2: ...
 
-    async def read_events(self, answer_id: ID, after: int, limit: int) -> list[AnswerEvent]: ...
+    async def read_events(
+        self, answer_id: ID, after: int, limit: int
+    ) -> list[AnswerEvent | AnswerEventV2]: ...
 
     async def finalize_answer(
         self, answer_id: ID, result: Answer, expected_state: str
@@ -155,7 +183,7 @@ class JobRepository(Protocol):
     async def renew_lease(self, job_id: ID, worker_id: ID, lease_until: object) -> bool: ...
 
     async def update_with_event(
-        self, job: Job, expected_revision: int, event: JobEvent
+        self, job: Job, expected_revision: int, event: JobEvent | JobEventV2
     ) -> Job: ...
 
     async def update(self, job: Job, expected_revision: int) -> Job: ...
@@ -168,9 +196,13 @@ class JobRepository(Protocol):
         self, job_id: ID, state: TransferState, expected_revision: int
     ) -> Job: ...
 
-    async def append_event(self, job_id: ID, event: JobEvent) -> JobEvent: ...
+    async def append_event(
+        self, job_id: ID, event: JobEvent | JobEventV2
+    ) -> JobEvent | JobEventV2: ...
 
-    async def read_events(self, job_id: ID, after: int, limit: int) -> list[JobEvent]: ...
+    async def read_events(
+        self, job_id: ID, after: int, limit: int
+    ) -> list[JobEvent | JobEventV2]: ...
 
 
 class ModelRepository(Protocol):

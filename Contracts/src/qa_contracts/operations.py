@@ -2,30 +2,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from enum import StrEnum
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import AwareDatetime, Field
+from pydantic import AwareDatetime, Field, TypeAdapter, model_validator
 
 from .base import HTTP_SCHEMA_VERSION, ID, ContractModel, utc_now
-from .models import InferencePolicy
 
 
 class Principal(ContractModel):
     principal_id: ID
     display_name: str = ""
     is_admin: bool = False
-
-
-class AccessScope(ContractModel):
-    """Authorization facts the domain uses; never derived from client input."""
-
-    principal_id: ID
-    kb_ids: list[ID] = Field(default_factory=list)
-    can_manage_kb: bool = False
-    can_manage_models: bool = False
-    allowed_policies: list[InferencePolicy] = Field(default_factory=list)
-    allowed_profile_ids: list[ID] = Field(default_factory=list)
 
 
 class JobKind(StrEnum):
@@ -155,7 +144,78 @@ class JobEvent(ContractModel):
     diagnostic: str | None = None
 
 
-from .answers import AnswerEvent  # noqa: E402
+class JobEventV2(ContractModel):
+    """New install/recovery states never overload the persisted v1 event enum."""
+
+    schema_version: Literal[2] = 2
+    job_id: ID
+    seq: int = Field(ge=1)
+    timestamp: AwareDatetime = Field(default_factory=utc_now)
+    event: Literal[
+        "job.accepted", "job.progress", "job.cancel_requested", "job.outcome_unknown",
+        "job.completed", "job.failed", "job.cancelled",
+    ]
+    progress: float | None = Field(default=None, ge=0.0, le=1.0)
+    bytes_downloaded: int | None = Field(default=None, ge=0)
+    total_bytes: int | None = Field(default=None, ge=0)
+    phase: str | None = None
+    diagnostic: str | None = None
+
+    @model_validator(mode="after")
+    def _uncertain_outcomes_are_explicit(self) -> JobEventV2:
+        if self.event == "job.outcome_unknown" and not self.diagnostic:
+            raise ValueError("unknown outcome requires a non-sensitive diagnostic")
+        return self
+
+
+JobEventWire = Annotated[JobEvent | JobEventV2, Field(discriminator="schema_version")]
+
+
+def parse_job_event(value: Mapping[str, object]) -> JobEvent | JobEventV2:
+    """Read persisted v1 without rewriting and new P3 events as v2."""
+    version = value.get("schema_version")
+    if type(version) is not int or version not in (1, 2):
+        raise ValueError(f"unsupported job event schema_version: {version!r}")
+    return TypeAdapter(JobEventWire).validate_python(value)
+
+
+def validate_job_event_sequence_v2(
+    events: Iterable[JobEventV2], *, require_terminal: bool = False
+) -> None:
+    """Replay never treats a pending cancel or unknown transfer as completed."""
+    owner: str | None = None
+    last_seq = 0
+    terminal = False
+    seen_cancel = False
+    seen_unknown = False
+    for event in events:
+        if event.schema_version != 2 or event.seq != last_seq + 1 or terminal:
+            raise ValueError("non-contiguous sequence, wrong version or event after terminal")
+        if owner is None:
+            if event.event != "job.accepted":
+                raise ValueError("the first event must accept the job")
+            owner = event.job_id
+        elif event.job_id != owner or event.event == "job.accepted":
+            raise ValueError("job ID must stay fixed and acceptance cannot repeat")
+        if event.event == "job.cancel_requested":
+            if seen_cancel:
+                raise ValueError("cancellation may be requested only once")
+            seen_cancel = True
+        if event.event == "job.outcome_unknown":
+            if seen_unknown:
+                raise ValueError("unknown transfer outcome may be recorded only once")
+            seen_unknown = True
+        # A reconciled transfer may complete or fail; a request to cancel may
+        # only become cancelled after confirmation, never merely on request.
+        if event.event in {"job.completed", "job.failed", "job.cancelled"}:
+            terminal = True
+        last_seq = event.seq
+    if require_terminal and not terminal:
+        raise ValueError("the replay has no verified terminal outcome")
+
+
+from .answers import AnswerEvent, AnswerEventV2  # noqa: E402
+from .models import AccessScope as AccessScope  # noqa: E402
 from .models import InferenceSelection  # noqa: E402
 from .selection import RetrievalSelection  # noqa: E402
 
@@ -163,6 +223,6 @@ RetestRequest.model_rebuild()
 
 #: Answer events carry ``answer_id``; job events carry ``job_id`` and never fake one.
 #: Both DTOs forbid extra fields, so a payload validates as exactly one branch.
-SSEEvent = AnswerEvent | JobEvent
+SSEEvent = AnswerEvent | AnswerEventV2 | JobEvent | JobEventV2
 
 

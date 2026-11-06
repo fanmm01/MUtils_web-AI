@@ -7,7 +7,9 @@
  */
 
 import type { Client } from "./client.js";
-import type { SSEEvent } from "./types.js";
+import type { AnswerEvent, AnswerEventV2, JobEvent, JobEventV2 } from "./generated/events.js";
+
+export type SSEEvent = AnswerEvent | AnswerEventV2 | JobEvent | JobEventV2;
 
 export interface SSECallbacks {
   onEvent: (event: SSEEvent) => void;
@@ -49,7 +51,10 @@ async function subscribe(client: Client, path: string, callbacks: SSECallbacks):
       const response = await client.stream(path, { signal: callbacks.signal, headers });
       let terminal = false;
       for await (const event of parseSSE(response.body)) {
-        if (typeof event.id === "number") after = event.id;
+        if (typeof event.id === "number") {
+          if (after !== undefined && event.id <= after) continue;
+          after = event.id;
+        }
         callbacks.onEvent(event);
         if (isTerminal(event)) {
           terminal = true;

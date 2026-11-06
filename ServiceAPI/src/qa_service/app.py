@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-from qa_contracts.errors import FeatureNotImplemented
+from qa_contracts.errors import STATUS_BY_CODE, APIErrorResponse, FeatureNotImplemented
 
 from . import __version__
 from .container import build_container, close_container
@@ -59,7 +59,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(
         title="Q&A Assistant API",
         version=__version__,
-        description="Scaffold build: business endpoints return 501 until later phases.",
+        description=(
+            "P3 contract gate: P2 management routes work in operational mode; "
+            "model, answer, conflict resolution and SSE business remain unimplemented."
+        ),
         lifespan=lifespan,
     )
     app.state.container = container
@@ -85,6 +88,45 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     install_handlers(app)
     for module in ROUTE_MODULES:
         app.include_router(module.router)
+
+    # FastAPI's default 422 shape does not match the installed error handlers.
+    # Publish the actual envelope consistently for every declared endpoint.
+    error_responses = {
+        str(status): {
+            "description": "Error response",
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/APIErrorResponse"}
+                }
+            },
+        }
+        for status in sorted(set(STATUS_BY_CODE.values()) - {200})
+    }
+    generated_openapi = app.openapi
+
+    def documented_openapi() -> dict[str, object]:
+        if app.openapi_schema is not None:
+            return app.openapi_schema  # type: ignore[no-any-return]
+        schema = generated_openapi()
+        components = schema.setdefault("components", {}).setdefault("schemas", {})
+        error_schema = APIErrorResponse.model_json_schema(
+            ref_template="#/components/schemas/{model}"
+        )
+        components.update(error_schema.pop("$defs", {}))
+        components["APIErrorResponse"] = error_schema
+        for path, item in schema["paths"].items():
+            for operation in item.values():
+                if not isinstance(operation, dict) or "responses" not in operation:
+                    continue
+                responses = operation["responses"]
+                for status, response in error_responses.items():
+                    if path == "/readyz" and status == "503":
+                        continue
+                    responses[status] = response
+        app.openapi_schema = schema
+        return schema
+
+    app.openapi = documented_openapi
     return app
 
 

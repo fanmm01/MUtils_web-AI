@@ -167,6 +167,7 @@ class Client:
             "PUT",
             f"/v1/uploads/{batch_id}/files",
             params={"relative_path": relative_path},
+            headers={"Content-Type": "application/octet-stream"},
             content=data,
         )
 
@@ -178,6 +179,17 @@ class Client:
 
     def import_documents(self, kb_id: str, body: Mapping[str, Any]) -> dict[str, Any]:
         return self._post(f"/v1/kbs/{kb_id}/imports", json=body)
+
+    def resolve_import_conflicts(
+        self, kb_id: str, preview_id: str, body: Mapping[str, Any], idempotency_key: str
+    ) -> dict[str, Any]:
+        if not idempotency_key.strip():
+            raise ValueError("Idempotency-Key is required")
+        return self._post(
+            f"/v1/kbs/{kb_id}/imports/{preview_id}/resolve",
+            json=body,
+            headers={"Idempotency-Key": idempotency_key},
+        )
 
     def sync_source(self, source_id: str, body: Mapping[str, Any]) -> dict[str, Any]:
         return self._post(f"/v1/sources/{source_id}/sync", json=body)
@@ -369,8 +381,8 @@ class Client:
         return self._post(f"/v1/jobs/{job_id}/cancel")
 
     def job_events(self, job_id: str, last_id: int | None = None) -> Iterator[dict[str, Any]]:
-        params = {"last_event_id": last_id} if last_id is not None else None
-        return iter(self._get(f"/v1/jobs/{job_id}/events", params=params))
+        headers = {"Last-Event-ID": str(last_id)} if last_id is not None else None
+        return iter(self._get(f"/v1/jobs/{job_id}/events", headers=headers))
 
     def subscribe_answer(self, answer_id: str, after: int | None = None) -> Iterator[SSEEvent]:
         headers = {"Accept": "text/event-stream"}
@@ -378,6 +390,8 @@ class Client:
             headers["Last-Event-ID"] = str(after)
         with self._http.stream("GET", f"/v1/answers/{answer_id}/events", headers=headers) as r:
             _raise_for_stream(r)
+            if not r.headers.get("content-type", "").lower().startswith("text/event-stream"):
+                raise QAError("INTERNAL_ERROR", "expected text/event-stream answer events")
             yield from decode_sse(r.iter_bytes())
 
     def subscribe_job(self, job_id: str, after: int | None = None) -> Iterator[SSEEvent]:
@@ -386,6 +400,8 @@ class Client:
             headers["Last-Event-ID"] = str(after)
         with self._http.stream("GET", f"/v1/jobs/{job_id}/events", headers=headers) as r:
             _raise_for_stream(r)
+            if not r.headers.get("content-type", "").lower().startswith("text/event-stream"):
+                raise QAError("INTERNAL_ERROR", "expected text/event-stream job events")
             yield from decode_sse(r.iter_bytes())
 
     # -- feedback ---------------------------------------------------------

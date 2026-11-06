@@ -13,9 +13,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 #: The P2 Gate changes HTTP request/response DTOs incompatibly with the P1 baseline.
 HTTP_SCHEMA_VERSION = 2
-#: Persisted SSE events retain their P1 wire format and remain replayable.
+#: Persisted v1 remains the compatibility default for legacy writers/readers.
 EVENT_SCHEMA_VERSION = 1
-#: Compatibility alias for existing event validators and consumers.
+#: Compatibility alias for existing v1 event validators and consumers.
 SCHEMA_VERSION = EVENT_SCHEMA_VERSION
 
 #: Opaque server-generated identifier.

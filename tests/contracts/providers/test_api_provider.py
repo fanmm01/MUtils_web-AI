@@ -77,7 +77,7 @@ def test_every_route_in_openapi_is_registered(client: TestClient) -> None:
             concrete = concrete.replace(token, "x")
         for token in ("{session_id}", "{answer_id}", "{citation_id}", "{issue_id}"):
             concrete = concrete.replace(token, "x")
-        for token in ("{model_id}", "{profile_id}", "{job_id}"):
+        for token in ("{model_id}", "{profile_id}", "{job_id}", "{preview_id}"):
             concrete = concrete.replace(token, "x")
         if method == "GET" and path in {"/openapi.json", "/docs", "/redoc"}:
             continue

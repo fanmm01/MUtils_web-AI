@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Header
 
+from qa_contracts.base import ContractModel
 from qa_contracts.errors import (
     Conflict,
     ErrorDetail,
@@ -21,30 +22,58 @@ from ..deps import ContainerDep, services_for
 router = APIRouter(tags=["operations"])
 
 
+class JobEventEnvelope(ContractModel):
+    """P2 JSON replay; distinct from the future SSE representation."""
+
+    id: int
+    event: str
+    data: JobEvent
+
+
 @router.get("/v1/jobs/{job_id}", response_model=Job)
 async def get_job(job_id: str, container: ContainerDep) -> Job:
     services = await services_for(container)
     return await services.container.jobs.get(job_id)  # type: ignore[union-attr]
 
 
-@router.get("/v1/jobs/{job_id}/events")
+@router.get(
+    "/v1/jobs/{job_id}/events",
+    response_model=list[JobEventEnvelope],
+    responses={
+        200: {
+            "description": "Persisted JSON replay; SSE is not yet implemented",
+            "content": {
+                "application/json": {"schema": {
+                    "type": "array", "items": {"$ref": "#/components/schemas/JobEventEnvelope"}
+                }},
+                "text/event-stream": {
+                    "schema": {"type": "string"},
+                    "description": "Reserved for negotiated P3 SSE; currently returns 501",
+                },
+            },
+        }
+    },
+)
 async def job_events(
     job_id: str,
     container: ContainerDep,
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
-) -> list[dict[str, object]]:
+    accept: str | None = Header(default=None, alias="Accept"),
+) -> list[JobEventEnvelope]:
     """Persisted event replay as JSON.
 
     The streaming form is P3; until then a client can poll this endpoint and get
     the same persisted events with stable sequence numbers.
     """
+    if accept and "text/event-stream" in accept.lower():
+        raise FeatureNotImplemented("job SSE")
     services = await services_for(container)
     jobs = services.container.jobs
     assert jobs is not None
     await jobs.get(job_id)
     after = _cursor(last_event_id)
     events = await jobs.read_events(job_id, after, 200)
-    return [_envelope(event) for event in events]
+    return [JobEventEnvelope(id=event.seq, event=event.event.value, data=event) for event in events]
 
 
 @router.post("/v1/jobs/{job_id}/cancel", response_model=Job)
@@ -107,11 +136,6 @@ def _cursor(value: str | None) -> int:
             [ErrorDetail(field="Last-Event-ID", reason="must not be negative")]
         )
     return cursor
-
-
-def _envelope(event: JobEvent) -> dict[str, object]:
-    return {"id": event.seq, "event": event.event.value,
-            "data": event.model_dump(mode="json")}
 
 
 __all__ = ["router"]

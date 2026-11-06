@@ -33,6 +33,9 @@ import type {
   ImportPreview,
   ImportPreviewRequest,
   ImportRequest,
+  ImportResolution,
+  JobEventEnvelope,
+  ResolveImportConflicts,
   InferenceProfile,
   InstallConfirmation,
   InstallPreview,
@@ -77,6 +80,7 @@ import type {
   UpdateSessionSelection,
   UploadBatch,
   UploadManifest,
+  VersionDiff,
   VerifyModelRequest,
 } from "./types.js";
 
@@ -200,18 +204,23 @@ export interface Client {
   completeUpload(batchId: Id, options?: RequestOptions): Promise<SourceManifest>;
   previewImport(kbId: Id, body: ImportPreviewRequest, options?: RequestOptions): Promise<ImportPreview>;
   importDocuments(kbId: Id, body: ImportRequest, options?: RequestOptions): Promise<ChangeReceipt>;
+  resolveImportConflicts(
+    kbId: Id,
+    previewId: Id,
+    body: ResolveImportConflicts,
+    options: IdempotentRequestOptions,
+  ): Promise<ImportResolution>;
 
   listVersions(kbId: Id, options?: RequestOptions): Promise<Snapshot[]>;
   getVersion(versionId: Id, options?: RequestOptions): Promise<Snapshot>;
-  /** The contract types the diff body only as an object; callers validate it. */
-  diffVersions(kbId: Id, left: Id, right: Id, options?: RequestOptions): Promise<Record<string, unknown>>;
+  diffVersions(kbId: Id, left: Id, right: Id, options?: RequestOptions): Promise<VersionDiff>;
   publishVersion(versionId: Id, body: PublishRequest, options?: RequestOptions): Promise<Snapshot>;
   rollbackVersion(kbId: Id, body: RollbackRequest, options?: RequestOptions): Promise<Snapshot>;
 
   getJob(jobId: Id, options?: RequestOptions): Promise<Job>;
   cancelJob(jobId: Id, options?: RequestOptions): Promise<Job>;
-  /** Persisted job events after `after` (JSON replay; the SSE form is P3). */
-  jobEvents(jobId: Id, after?: number, options?: RequestOptions): Promise<Array<Record<string, unknown>>>;
+  /** Persisted job events after `after` (JSON replay; distinct from negotiated SSE). */
+  jobEvents(jobId: Id, after?: number, options?: RequestOptions): Promise<JobEventEnvelope[]>;
 
   getKnowledgeCatalog(options?: RequestOptions): Promise<Page_KBDescriptor_>;
   previewSelection(body: SelectionPreviewRequest, options?: RequestOptions): Promise<SelectionResult>;
@@ -390,6 +399,10 @@ export function createClient(options: ClientOptions): Client {
         response.headers.get("X-Request-ID") ?? undefined,
       );
     }
+    if (!response.headers.get("Content-Type")?.toLowerCase().startsWith("text/event-stream")) {
+      response.body?.cancel();
+      throw new Error("SSE response must use text/event-stream");
+    }
     return response;
   }
 
@@ -489,6 +502,12 @@ export function createClient(options: ClientOptions): Client {
       op("post", "/v1/kbs/{kb_id}/imports/preview", { path: { kb_id: kbId }, body, options: o }),
     importDocuments: (kbId, body, o) =>
       op("post", "/v1/kbs/{kb_id}/imports", { path: { kb_id: kbId }, body, options: o }),
+    resolveImportConflicts: (kbId, previewId, body, o) => {
+      if (!o?.idempotencyKey?.trim()) throw new Error("Idempotency-Key is required");
+      return op("post", "/v1/kbs/{kb_id}/imports/{preview_id}/resolve", {
+        path: { kb_id: kbId, preview_id: previewId }, body, options: o,
+      });
+    },
     listVersions: (kbId, o) =>
       op("get", "/v1/kbs/{kb_id}/versions", { path: { kb_id: kbId }, options: o }),
     getVersion: (versionId, o) =>

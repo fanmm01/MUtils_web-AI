@@ -201,7 +201,7 @@ export async function loadDiff(ctx: PageContext, kb: KnowledgeBase, leftId: stri
     ctx.client.diffVersions(kb.kb_id, leftId, rightId, { signal: ctx.signal }),
     documentTitles(ctx, kb),
   ]);
-  const ids = (key: string): string[] => {
+  const ids = (key: "added" | "modified" | "removed"): string[] => {
     const value = raw[key];
     if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
       throw new Error(`服务端返回的版本差异缺少 ${key} 列表`);

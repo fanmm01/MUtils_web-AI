@@ -38,6 +38,7 @@ def scaffold_scope(request: Request) -> AccessScope:
         principal_id="local-operator",
         kb_ids=list(container.authorized_kb_ids),
         can_manage_kb=True,
+        can_manage_models=True,
     )
 
 

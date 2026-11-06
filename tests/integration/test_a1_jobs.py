@@ -58,6 +58,9 @@ def test_queued_job_can_be_cancelled_immediately(api: TestClient) -> None:
     assert response.json()["state"] == "cancelled"
     events = api.get(f"/v1/jobs/{job_id}/events").json()
     assert [event["event"] for event in events] == ["job.cancelled"]
+    assert api.get(
+        f"/v1/jobs/{job_id}/events", headers={"Accept": "text/event-stream"}
+    ).status_code == 501
 
     again = api.post(f"/v1/jobs/{job_id}/cancel")
     assert again.status_code == 409

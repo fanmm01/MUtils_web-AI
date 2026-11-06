@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
+import json
+from datetime import datetime
 from enum import StrEnum
+from hashlib import sha256
 from typing import Literal
 
-from pydantic import AwareDatetime, Field
+from pydantic import AwareDatetime, Field, model_validator
 
 from .base import ID, ContractModel, utc_now
+from .errors import (
+    InferencePolicyViolation,
+    ModelCapabilityMissing,
+    ModelChanged,
+    PermissionDenied,
+)
 
 
 class RuntimeKind(StrEnum):
@@ -30,6 +39,22 @@ class InferencePolicy(StrEnum):
     CONFIGURED = "configured"
 
 
+class AccessScope(ContractModel):
+    """Server-derived permissions; never constructed from request JSON."""
+
+    principal_id: ID
+    kb_ids: list[ID] = Field(default_factory=list)
+    can_manage_kb: bool = False
+    can_manage_models: bool = False
+    allowed_policies: list[InferencePolicy] = Field(default_factory=list)
+    allowed_profile_ids: list[ID] = Field(default_factory=list)
+
+
+class ExecutionLocation(StrEnum):
+    LOCAL = "local"
+    CONFIGURED_REMOTE = "configured_remote"
+
+
 class Presence(StrEnum):
     """Four independent facts; ``unknown`` is a first-class answer."""
 
@@ -45,6 +70,7 @@ class RuntimeTarget(ContractModel):
     kind: RuntimeKind
     display_name: str = ""
     configured: bool = True
+    location: ExecutionLocation = ExecutionLocation.LOCAL
 
 
 class RuntimeEvidence(ContractModel):
@@ -115,24 +141,104 @@ class ModelRef(ContractModel):
     identity_status: Literal["resolved", "unresolved"] = "unresolved"
     digest: str | None = None
 
+    @model_validator(mode="after")
+    def _identity_consistent(self) -> ModelRef:
+        if self.identity_status == "resolved" and (
+            self.digest is None
+            or not self.digest.startswith("sha256:")
+            or len(self.digest) != len("sha256:") + 64
+            or any(char not in "0123456789abcdef" for char in self.digest[7:].lower())
+        ):
+            raise ValueError("a resolved model reference requires a complete sha256 digest")
+        if self.identity_status == "unresolved" and self.digest is not None:
+            raise ValueError("an unresolved model reference cannot claim a digest")
+        return self
+
 
 class ModelIdentity(ContractModel):
+    """An exact tag is an alias; only a resolved digest pins model bytes.
+
+    An adapter must compare this identity with a fresh runtime observation before
+    every call. A mutable tag alone cannot promise reproducible results.
+    """
+
     model_id: ID
-    exact_tag: str
+    exact_tag: str = Field(min_length=1)
     digest: str | None = None
     identity_status: Literal["resolved", "unresolved"] = "unresolved"
+    runtime_target_id: ID | None = None
+
+    @model_validator(mode="after")
+    def _resolved_has_digest(self) -> ModelIdentity:
+        if self.identity_status == "resolved" and (
+            self.digest is None
+            or not self.digest.startswith("sha256:")
+            or len(self.digest) != len("sha256:") + 64
+            or any(char not in "0123456789abcdef" for char in self.digest[7:].lower())
+        ):
+            raise ValueError("a resolved model identity requires a complete sha256 digest")
+        if self.identity_status == "unresolved" and self.digest is not None:
+            raise ValueError("an unresolved model identity cannot claim a digest")
+        return self
+
+    def assert_unchanged(self, observed: ModelIdentity) -> None:
+        """Fail closed on identity drift or an unresolved/ambiguous label."""
+        if (
+            self.identity_status != "resolved"
+            or observed.identity_status != "resolved"
+            or not self.digest
+            or not observed.digest
+            or self.model_id != observed.model_id
+            or self.exact_tag != observed.exact_tag
+            or self.digest != observed.digest
+            or (
+                self.runtime_target_id is not None
+                and self.runtime_target_id != observed.runtime_target_id
+            )
+        ):
+            raise ModelChanged(self.digest or "unresolved", observed.digest or "unresolved")
 
 
 class EmbeddingProfile(ContractModel):
-    """Fingerprint pinned into a snapshot; a query must reuse the exact profile."""
+    """Full snapshot fingerprint; only a resolved identity is usable for vectors."""
 
     profile_key: str = Field(min_length=1)
     model_id: ID
     digest: str | None = None
     dimension: int = Field(ge=1)
     normalized: bool = True
-    preprocessing: str = "none"
+    preprocessing: str = Field(default="none", min_length=1)
     truncation_tokens: int | None = Field(default=None, ge=1)
+    truncation_policy: Literal["reject", "truncate"] = "reject"
+    identity: ModelIdentity | None = None
+
+    @model_validator(mode="after")
+    def _consistent_identity(self) -> EmbeddingProfile:
+        if self.identity is not None and (
+            self.identity.model_id != self.model_id or self.identity.digest != self.digest
+        ):
+            raise ValueError("embedding identity must match model ID and digest")
+        if self.truncation_policy == "truncate" and self.truncation_tokens is None:
+            raise ValueError("truncate policy requires an explicit token limit")
+        return self
+
+    def fingerprint(self) -> str:
+        """Reject legacy tag-only vectors instead of labelling them reproducible."""
+        if self.identity is None or self.identity.identity_status != "resolved" or not self.digest:
+            raise ValueError("vector profiles require a resolved model identity")
+        payload = {
+            "runtime_target_id": self.identity.runtime_target_id,
+            "model_id": self.model_id,
+            "exact_tag": self.identity.exact_tag,
+            "digest": self.digest,
+            "dimension": self.dimension,
+            "normalized": self.normalized,
+            "preprocessing": self.preprocessing,
+            "truncation_tokens": self.truncation_tokens,
+            "truncation_policy": self.truncation_policy,
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        return sha256(encoded).hexdigest()
 
 
 class InferenceProfile(ContractModel):
@@ -144,6 +250,12 @@ class InferenceProfile(ContractModel):
     rewriter_enabled: bool = False
     policy_default: InferencePolicy = InferencePolicy.LOCAL_ONLY
     created_at: AwareDatetime = Field(default_factory=utc_now)
+
+    def require_role(self, role: ModelRole) -> ModelIdentity:
+        identity = self.roles.get(role)
+        if identity is None:
+            raise ModelCapabilityMissing(role.value)
+        return identity
 
 
 class ProfileSummary(ContractModel):
@@ -177,6 +289,56 @@ class RoleBinding(ContractModel):
     policy: InferencePolicy
     identity: ModelIdentity
     budget_tokens: int | None = Field(default=None, ge=0)
+    location: ExecutionLocation = ExecutionLocation.LOCAL
+    runtime_target_id: ID | None = None
+    timeout_ms: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def _policy_matches_location(self) -> RoleBinding:
+        if self.policy == InferencePolicy.LOCAL_ONLY and self.location != ExecutionLocation.LOCAL:
+            raise InferencePolicyViolation(self.role.value)
+        if self.identity.runtime_target_id is not None and (
+            self.runtime_target_id != self.identity.runtime_target_id
+        ):
+            raise ValueError("role binding runtime must match the exact model identity")
+        return self
+
+
+def authorize_role_binding(
+    binding: RoleBinding, targets: list[RuntimeTarget], observed: ModelIdentity
+) -> RuntimeTarget:
+    """Recheck a call against a server-owned target and current model identity."""
+    target = next(
+        (
+            item for item in targets
+            if item.configured and item.target_id == binding.runtime_target_id
+        ),
+        None,
+    )
+    if target is None:
+        raise ModelCapabilityMissing(binding.role.value)
+    if binding.location != target.location or (
+        binding.policy == InferencePolicy.LOCAL_ONLY
+        and target.location != ExecutionLocation.LOCAL
+    ):
+        raise InferencePolicyViolation(binding.role.value)
+    binding.identity.assert_unchanged(observed)
+    return target
+
+
+class CandidateEmbedder(ContractModel):
+    """One candidate snapshot is pinned to its exact embedding role and profile."""
+
+    kb_id: ID
+    version_id: ID
+    fingerprint: str = Field(min_length=1)
+    binding: RoleBinding
+
+    @model_validator(mode="after")
+    def _requires_embedder(self) -> CandidateEmbedder:
+        if self.binding.role != ModelRole.EMBEDDER:
+            raise ValueError("candidate embedding must bind the embedder role")
+        return self
 
 
 class BindingOwner(ContractModel):
@@ -189,7 +351,33 @@ class InferenceBinding(ContractModel):
     profile_revision: ID | None = None
     policy: InferencePolicy
     roles: list[RoleBinding] = Field(default_factory=list)
+    candidate_embedders: list[CandidateEmbedder] = Field(default_factory=list)
     created_at: AwareDatetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def _fixed_roles_and_candidates(self) -> InferenceBinding:
+        names = [item.role for item in self.roles]
+        if len(names) != len(set(names)):
+            raise ValueError("each inference role may be bound only once")
+        candidates = [(item.kb_id, item.version_id) for item in self.candidate_embedders]
+        if len(candidates) != len(set(candidates)):
+            raise ValueError("each candidate snapshot requires exactly one embedding binding")
+        for item in [*self.roles, *(candidate.binding for candidate in self.candidate_embedders)]:
+            if item.policy != self.policy:
+                raise ValueError("binding policy must match every role and candidate")
+        return self
+
+    def require_role(self, role: ModelRole) -> RoleBinding:
+        for bound in self.roles:
+            if bound.role == role:
+                return bound
+        raise ModelCapabilityMissing(role.value)
+
+    def require_embedder(self, kb_id: ID, version_id: ID) -> CandidateEmbedder:
+        for candidate in self.candidate_embedders:
+            if candidate.kb_id == kb_id and candidate.version_id == version_id:
+                return candidate
+        raise ModelCapabilityMissing(ModelRole.EMBEDDER.value)
 
 
 class SessionInference(ContractModel):
@@ -207,19 +395,70 @@ class InstallRequest(ContractModel):
     target_id: ID
     model_ref: str = Field(min_length=1)
 
+    def authorize(self, targets: list[RuntimeTarget], access: AccessScope) -> RuntimeTarget:
+        if not access.can_manage_models:
+            raise PermissionDenied("model installation")
+        target = next(
+            (item for item in targets if item.configured and item.target_id == self.target_id),
+            None,
+        )
+        if target is None:
+            raise ModelCapabilityMissing(ModelRole.GENERATOR.value)
+        return target
+
 
 class InstallPreview(ContractModel):
     preview_id: ID
     target_id: ID
+    target_location: ExecutionLocation
     model_ref: str
     preview_hash: str
     identity_status: Literal["resolved", "unresolved"] = "unresolved"
+    expected_identity: ModelIdentity | None = None
+    principal_id: ID
+    expires_at: AwareDatetime
     size_bytes: int | None = Field(default=None, ge=0)
     missing_layers: int | None = Field(default=None, ge=0)
     target_cache: str | None = None
     license_url: str | None = None
     unknown_fields: list[str] = Field(default_factory=list)
     created_at: AwareDatetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def _identity_and_expiry(self) -> InstallPreview:
+        if self.expires_at <= self.created_at:
+            raise ValueError("install preview expiry must be later than creation")
+        if self.target_location == ExecutionLocation.LOCAL and self.target_cache is not None and (
+            "://" in self.target_cache
+            or self.target_cache.startswith(("/", "\\\\"))
+            or (
+                ":" in self.target_cache
+                and ("/" in self.target_cache or "\\\\" in self.target_cache)
+            )
+        ):
+            raise ValueError("target cache must be a server-owned opaque label, not a path or URL")
+        if self.expected_identity is not None and (
+            self.expected_identity.identity_status != self.identity_status
+        ):
+            raise ValueError("preview identity status must match observed identity")
+        return self
+
+    def assert_confirmable(
+        self, principal_id: ID, now: datetime, confirmation: InstallConfirmation | None = None,
+        observed_identity: ModelIdentity | None = None,
+    ) -> None:
+        """Reject stale previews or tag drift; unknown digest is not a verified binding."""
+        if self.principal_id != principal_id or now >= self.expires_at:
+            raise ValueError("install preview is expired or belongs to another principal")
+        if confirmation is not None and (
+            confirmation.preview_id != self.preview_id
+            or confirmation.preview_hash != self.preview_hash
+        ):
+            raise ValueError("install confirmation does not match the preview")
+        if self.expected_identity is not None:
+            if observed_identity is None:
+                raise ModelChanged(self.expected_identity.digest or "unresolved", "unobserved")
+            self.expected_identity.assert_unchanged(observed_identity)
 
 
 class InstallConfirmation(ContractModel):
@@ -260,6 +499,12 @@ class TransferState(ContractModel):
     bytes_downloaded: int | None = Field(default=None, ge=0)
     total_bytes: int | None = Field(default=None, ge=0)
     outcome_unknown: bool = False
+
+    @model_validator(mode="after")
+    def _uncertain_is_not_completed(self) -> TransferState:
+        if self.outcome_unknown and self.phase in {"completed", "cancelled"}:
+            raise ValueError("unknown transfer cannot claim a confirmed terminal state")
+        return self
 
 
 class CancelResult(ContractModel):

@@ -115,6 +115,2047 @@
     "title": "AnswerEvent",
     "type": "object"
   },
+  "answer_event_v2": {
+    "$defs": {
+      "Answer": {
+        "additionalProperties": false,
+        "properties": {
+          "answer_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Answer Id",
+            "type": "string"
+          },
+          "binding": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/InferenceBinding"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/$defs/Citation"
+            },
+            "title": "Citations",
+            "type": "array"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Completed At"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "effective_inference": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/EffectiveInference"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "effective_selection": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/EffectiveSelection"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error Code"
+          },
+          "question": {
+            "title": "Question",
+            "type": "string"
+          },
+          "refusal_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Refusal Reason"
+          },
+          "requested_selection": {
+            "anyOf": [
+              {
+                "discriminator": {
+                  "mapping": {
+                    "auto": "#/$defs/AutoSelection",
+                    "explicit": "#/$defs/ExplicitSelection"
+                  },
+                  "propertyName": "mode"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/ExplicitSelection"
+                  },
+                  {
+                    "$ref": "#/$defs/AutoSelection"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Requested Selection"
+          },
+          "resolved_scope": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ResolvedScope"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "selection_result": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SelectionResult"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "session_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Session Id",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/$defs/AnswerTerminal",
+            "default": "pending"
+          },
+          "text": {
+            "default": "",
+            "title": "Text",
+            "type": "string"
+          },
+          "used_kb_ids": {
+            "items": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "title": "Used Kb Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "answer_id",
+          "session_id",
+          "question"
+        ],
+        "title": "Answer",
+        "type": "object"
+      },
+      "AnswerAcceptedData": {
+        "additionalProperties": false,
+        "description": "The accepted request fixes revisions before any model is called.",
+        "properties": {},
+        "title": "AnswerAcceptedData",
+        "type": "object"
+      },
+      "AnswerAcceptedV2": {
+        "additionalProperties": false,
+        "properties": {
+          "answer_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Answer Id",
+            "type": "string"
+          },
+          "binding_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Binding Id"
+          },
+          "data": {
+            "$ref": "#/$defs/AnswerAcceptedData"
+          },
+          "event": {
+            "const": "answer.accepted",
+            "default": "answer.accepted",
+            "title": "Event",
+            "type": "string"
+          },
+          "inference_revision": {
+            "minimum": 0,
+            "title": "Inference Revision",
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 2,
+            "default": 2,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "scope_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Id"
+          },
+          "scope_revision": {
+            "minimum": 0,
+            "title": "Scope Revision",
+            "type": "integer"
+          },
+          "seq": {
+            "minimum": 1,
+            "title": "Seq",
+            "type": "integer"
+          },
+          "session_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Session Id",
+            "type": "string"
+          },
+          "timestamp": {
+            "format": "date-time",
+            "title": "Timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "answer_id",
+          "session_id",
+          "seq",
+          "scope_revision",
+          "inference_revision",
+          "binding_id",
+          "scope_id",
+          "data"
+        ],
+        "title": "AnswerAcceptedV2",
+        "type": "object"
+      },
+      "AnswerCancelledData": {
+        "additionalProperties": false,
+        "properties": {
+          "incomplete": {
+            "default": false,
+            "title": "Incomplete",
+            "type": "boolean"
+          },
+          "reason": {
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "AnswerCancelledData",
+        "type": "object"
+      },
+      "AnswerCancelledV2": {
+        "additionalProperties": false,
+        "properties": {
+          "answer_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Answer Id",
+            "type": "string"
+          },
+          "binding_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Binding Id"
+          },
+          "data": {
+            "$ref": "#/$defs/AnswerCancelledData"
+          },
+          "event": {
+            "const": "answer.cancelled",
+            "default": "answer.cancelled",
+            "title": "Event",
+            "type": "string"
+          },
+          "inference_revision": {
+            "minimum": 0,
+            "title": "Inference Revision",
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 2,
+            "default": 2,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "scope_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Id"
+          },
+          "scope_revision": {
+            "minimum": 0,
+            "title": "Scope Revision",
+            "type": "integer"
+          },
+          "seq": {
+            "minimum": 1,
+            "title": "Seq",
+            "type": "integer"
+          },
+          "session_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Session Id",
+            "type": "string"
+          },
+          "timestamp": {
+            "format": "date-time",
+            "title": "Timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "answer_id",
+          "session_id",
+          "seq",
+          "scope_revision",
+          "inference_revision",
+          "binding_id",
+          "scope_id",
+          "data"
+        ],
+        "title": "AnswerCancelledV2",
+        "type": "object"
+      },
+      "AnswerCompletedData": {
+        "additionalProperties": false,
+        "properties": {
+          "answer": {
+            "$ref": "#/$defs/Answer"
+          }
+        },
+        "required": [
+          "answer"
+        ],
+        "title": "AnswerCompletedData",
+        "type": "object"
+      },
+      "AnswerCompletedV2": {
+        "additionalProperties": false,
+        "properties": {
+          "answer_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Answer Id",
+            "type": "string"
+          },
+          "binding_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Binding Id"
+          },
+          "data": {
+            "$ref": "#/$defs/AnswerCompletedData"
+          },
+          "event": {
+            "const": "answer.completed",
+            "default": "answer.completed",
+            "title": "Event",
+            "type": "string"
+          },
+          "inference_revision": {
+            "minimum": 0,
+            "title": "Inference Revision",
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 2,
+            "default": 2,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "scope_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Id"
+          },
+          "scope_revision": {
+            "minimum": 0,
+            "title": "Scope Revision",
+            "type": "integer"
+          },
+          "seq": {
+            "minimum": 1,
+            "title": "Seq",
+            "type": "integer"
+          },
+          "session_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Session Id",
+            "type": "string"
+          },
+          "timestamp": {
+            "format": "date-time",
+            "title": "Timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "answer_id",
+          "session_id",
+          "seq",
+          "scope_revision",
+          "inference_revision",
+          "binding_id",
+          "scope_id",
+          "data"
+        ],
+        "title": "AnswerCompletedV2",
+        "type": "object"
+      },
+      "AnswerDeltaData": {
+        "additionalProperties": false,
+        "properties": {
+          "citation_ids": {
+            "items": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Citation Ids",
+            "type": "array"
+          },
+          "sentence_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Sentence Id",
+            "type": "string"
+          },
+          "text": {
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sentence_id",
+          "text",
+          "citation_ids"
+        ],
+        "title": "AnswerDeltaData",
+        "type": "object"
+      },
+      "AnswerDeltaV2": {
+        "additionalProperties": false,
+        "properties": {
+          "answer_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Answer Id",
+            "type": "string"
+          },
+          "binding_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Binding Id"
+          },
+          "data": {
+            "$ref": "#/$defs/AnswerDeltaData"
+          },
+          "event": {
+            "const": "answer.delta",
+            "default": "answer.delta",
+            "title": "Event",
+            "type": "string"
+          },
+          "inference_revision": {
+            "minimum": 0,
+            "title": "Inference Revision",
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 2,
+            "default": 2,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "scope_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Id"
+          },
+          "scope_revision": {
+            "minimum": 0,
+            "title": "Scope Revision",
+            "type": "integer"
+          },
+          "seq": {
+            "minimum": 1,
+            "title": "Seq",
+            "type": "integer"
+          },
+          "session_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Session Id",
+            "type": "string"
+          },
+          "timestamp": {
+            "format": "date-time",
+            "title": "Timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "answer_id",
+          "session_id",
+          "seq",
+          "scope_revision",
+          "inference_revision",
+          "binding_id",
+          "scope_id",
+          "data"
+        ],
+        "title": "AnswerDeltaV2",
+        "type": "object"
+      },
+      "AnswerFailedData": {
+        "additionalProperties": false,
+        "properties": {
+          "incomplete": {
+            "default": false,
+            "title": "Incomplete",
+            "type": "boolean"
+          },
+          "reason": {
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "AnswerFailedData",
+        "type": "object"
+      },
+      "AnswerFailedV2": {
+        "additionalProperties": false,
+        "properties": {
+          "answer_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Answer Id",
+            "type": "string"
+          },
+          "binding_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Binding Id"
+          },
+          "data": {
+            "$ref": "#/$defs/AnswerFailedData"
+          },
+          "event": {
+            "const": "answer.failed",
+            "default": "answer.failed",
+            "title": "Event",
+            "type": "string"
+          },
+          "inference_revision": {
+            "minimum": 0,
+            "title": "Inference Revision",
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 2,
+            "default": 2,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "scope_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Id"
+          },
+          "scope_revision": {
+            "minimum": 0,
+            "title": "Scope Revision",
+            "type": "integer"
+          },
+          "seq": {
+            "minimum": 1,
+            "title": "Seq",
+            "type": "integer"
+          },
+          "session_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Session Id",
+            "type": "string"
+          },
+          "timestamp": {
+            "format": "date-time",
+            "title": "Timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "answer_id",
+          "session_id",
+          "seq",
+          "scope_revision",
+          "inference_revision",
+          "binding_id",
+          "scope_id",
+          "data"
+        ],
+        "title": "AnswerFailedV2",
+        "type": "object"
+      },
+      "AnswerRefusedData": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "AnswerRefusedData",
+        "type": "object"
+      },
+      "AnswerRefusedV2": {
+        "additionalProperties": false,
+        "properties": {
+          "answer_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Answer Id",
+            "type": "string"
+          },
+          "binding_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Binding Id"
+          },
+          "data": {
+            "$ref": "#/$defs/AnswerRefusedData"
+          },
+          "event": {
+            "const": "answer.refused",
+            "default": "answer.refused",
+            "title": "Event",
+            "type": "string"
+          },
+          "inference_revision": {
+            "minimum": 0,
+            "title": "Inference Revision",
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 2,
+            "default": 2,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "scope_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Id"
+          },
+          "scope_revision": {
+            "minimum": 0,
+            "title": "Scope Revision",
+            "type": "integer"
+          },
+          "seq": {
+            "minimum": 1,
+            "title": "Seq",
+            "type": "integer"
+          },
+          "session_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Session Id",
+            "type": "string"
+          },
+          "timestamp": {
+            "format": "date-time",
+            "title": "Timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "answer_id",
+          "session_id",
+          "seq",
+          "scope_revision",
+          "inference_revision",
+          "binding_id",
+          "scope_id",
+          "data"
+        ],
+        "title": "AnswerRefusedV2",
+        "type": "object"
+      },
+      "AnswerTerminal": {
+        "enum": [
+          "pending",
+          "completed",
+          "refused",
+          "failed",
+          "cancelled"
+        ],
+        "title": "AnswerTerminal",
+        "type": "string"
+      },
+      "AutoSelection": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_kb_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Candidate Kb Ids"
+          },
+          "max_kbs": {
+            "anyOf": [
+              {
+                "maximum": 20,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Max Kbs"
+          },
+          "mode": {
+            "const": "auto",
+            "default": "auto",
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "title": "AutoSelection",
+        "type": "object"
+      },
+      "CandidateEmbedder": {
+        "additionalProperties": false,
+        "description": "One candidate snapshot is pinned to its exact embedding role and profile.",
+        "properties": {
+          "binding": {
+            "$ref": "#/$defs/RoleBinding"
+          },
+          "fingerprint": {
+            "minLength": 1,
+            "title": "Fingerprint",
+            "type": "string"
+          },
+          "kb_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Kb Id",
+            "type": "string"
+          },
+          "version_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Version Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kb_id",
+          "version_id",
+          "fingerprint",
+          "binding"
+        ],
+        "title": "CandidateEmbedder",
+        "type": "object"
+      },
+      "Citation": {
+        "additionalProperties": false,
+        "properties": {
+          "chunk_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Chunk Id",
+            "type": "string"
+          },
+          "citation_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Citation Id",
+            "type": "string"
+          },
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "detail_path": {
+            "title": "Detail Path",
+            "type": "string"
+          },
+          "kb_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Kb Id",
+            "type": "string"
+          },
+          "locator": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Locator"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "quote": {
+            "title": "Quote",
+            "type": "string"
+          },
+          "revision_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Revision Id",
+            "type": "string"
+          },
+          "version_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Version Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "citation_id",
+          "chunk_id",
+          "kb_id",
+          "version_id",
+          "revision_id",
+          "quote",
+          "content_hash",
+          "detail_path"
+        ],
+        "title": "Citation",
+        "type": "object"
+      },
+      "CitationReadyData": {
+        "additionalProperties": false,
+        "properties": {
+          "citation": {
+            "$ref": "#/$defs/Citation"
+          }
+        },
+        "required": [
+          "citation"
+        ],
+        "title": "CitationReadyData",
+        "type": "object"
+      },
+      "CitationReadyV2": {
+        "additionalProperties": false,
+        "properties": {
+          "answer_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Answer Id",
+            "type": "string"
+          },
+          "binding_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Binding Id"
+          },
+          "data": {
+            "$ref": "#/$defs/CitationReadyData"
+          },
+          "event": {
+            "const": "citation.ready",
+            "default": "citation.ready",
+            "title": "Event",
+            "type": "string"
+          },
+          "inference_revision": {
+            "minimum": 0,
+            "title": "Inference Revision",
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 2,
+            "default": 2,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "scope_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Id"
+          },
+          "scope_revision": {
+            "minimum": 0,
+            "title": "Scope Revision",
+            "type": "integer"
+          },
+          "seq": {
+            "minimum": 1,
+            "title": "Seq",
+            "type": "integer"
+          },
+          "session_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Session Id",
+            "type": "string"
+          },
+          "timestamp": {
+            "format": "date-time",
+            "title": "Timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "answer_id",
+          "session_id",
+          "seq",
+          "scope_revision",
+          "inference_revision",
+          "binding_id",
+          "scope_id",
+          "data"
+        ],
+        "title": "CitationReadyV2",
+        "type": "object"
+      },
+      "EffectiveInference": {
+        "additionalProperties": false,
+        "properties": {
+          "profile_revision": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile Revision"
+          },
+          "selection": {
+            "$ref": "#/$defs/InferenceSelection"
+          },
+          "source": {
+            "default": "default",
+            "enum": [
+              "request",
+              "session",
+              "default"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "selection"
+        ],
+        "title": "EffectiveInference",
+        "type": "object"
+      },
+      "EffectiveSelection": {
+        "additionalProperties": false,
+        "properties": {
+          "selection": {
+            "discriminator": {
+              "mapping": {
+                "auto": "#/$defs/AutoSelection",
+                "explicit": "#/$defs/ExplicitSelection"
+              },
+              "propertyName": "mode"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/ExplicitSelection"
+              },
+              {
+                "$ref": "#/$defs/AutoSelection"
+              }
+            ],
+            "title": "Selection"
+          },
+          "source": {
+            "default": "default",
+            "enum": [
+              "request",
+              "session",
+              "default"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "selection"
+        ],
+        "title": "EffectiveSelection",
+        "type": "object"
+      },
+      "ExecutionLocation": {
+        "enum": [
+          "local",
+          "configured_remote"
+        ],
+        "title": "ExecutionLocation",
+        "type": "string"
+      },
+      "ExplicitSelection": {
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "const": "explicit",
+            "default": "explicit",
+            "title": "Mode",
+            "type": "string"
+          },
+          "targets": {
+            "items": {
+              "$ref": "#/$defs/KBTarget"
+            },
+            "minItems": 1,
+            "title": "Targets",
+            "type": "array"
+          }
+        },
+        "required": [
+          "targets"
+        ],
+        "title": "ExplicitSelection",
+        "type": "object"
+      },
+      "InferenceBinding": {
+        "additionalProperties": false,
+        "properties": {
+          "binding_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Binding Id",
+            "type": "string"
+          },
+          "candidate_embedders": {
+            "items": {
+              "$ref": "#/$defs/CandidateEmbedder"
+            },
+            "title": "Candidate Embedders",
+            "type": "array"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "policy": {
+            "$ref": "#/$defs/InferencePolicy"
+          },
+          "profile_revision": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile Revision"
+          },
+          "roles": {
+            "items": {
+              "$ref": "#/$defs/RoleBinding"
+            },
+            "title": "Roles",
+            "type": "array"
+          }
+        },
+        "required": [
+          "binding_id",
+          "policy"
+        ],
+        "title": "InferenceBinding",
+        "type": "object"
+      },
+      "InferenceBoundData": {
+        "additionalProperties": false,
+        "properties": {
+          "binding": {
+            "$ref": "#/$defs/InferenceBinding"
+          }
+        },
+        "required": [
+          "binding"
+        ],
+        "title": "InferenceBoundData",
+        "type": "object"
+      },
+      "InferenceBoundV2": {
+        "additionalProperties": false,
+        "properties": {
+          "answer_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Answer Id",
+            "type": "string"
+          },
+          "binding_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Binding Id"
+          },
+          "data": {
+            "$ref": "#/$defs/InferenceBoundData"
+          },
+          "event": {
+            "const": "inference.bound",
+            "default": "inference.bound",
+            "title": "Event",
+            "type": "string"
+          },
+          "inference_revision": {
+            "minimum": 0,
+            "title": "Inference Revision",
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 2,
+            "default": 2,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "scope_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Id"
+          },
+          "scope_revision": {
+            "minimum": 0,
+            "title": "Scope Revision",
+            "type": "integer"
+          },
+          "seq": {
+            "minimum": 1,
+            "title": "Seq",
+            "type": "integer"
+          },
+          "session_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Session Id",
+            "type": "string"
+          },
+          "timestamp": {
+            "format": "date-time",
+            "title": "Timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "answer_id",
+          "session_id",
+          "seq",
+          "scope_revision",
+          "inference_revision",
+          "binding_id",
+          "scope_id",
+          "data"
+        ],
+        "title": "InferenceBoundV2",
+        "type": "object"
+      },
+      "InferencePolicy": {
+        "enum": [
+          "local_only",
+          "configured"
+        ],
+        "title": "InferencePolicy",
+        "type": "string"
+      },
+      "InferenceSelection": {
+        "additionalProperties": false,
+        "properties": {
+          "policy": {
+            "$ref": "#/$defs/InferencePolicy",
+            "default": "local_only"
+          },
+          "profile_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile Id"
+          }
+        },
+        "title": "InferenceSelection",
+        "type": "object"
+      },
+      "KBTarget": {
+        "additionalProperties": false,
+        "description": "One knowledge base pinned to an optional immutable version.",
+        "properties": {
+          "kb_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Kb Id",
+            "type": "string"
+          },
+          "version_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Version Id"
+          }
+        },
+        "required": [
+          "kb_id"
+        ],
+        "title": "KBTarget",
+        "type": "object"
+      },
+      "Locator": {
+        "additionalProperties": false,
+        "description": "Traceable original position. Never invent a page number a format lacks.",
+        "properties": {
+          "cell_range": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Cell Range"
+          },
+          "end_line": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "End Line"
+          },
+          "heading": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Heading"
+          },
+          "kind": {
+            "$ref": "#/$defs/LocatorKind"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Page"
+          },
+          "paragraph": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Paragraph"
+          },
+          "sheet": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Sheet"
+          },
+          "start_line": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start Line"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "Locator",
+        "type": "object"
+      },
+      "LocatorKind": {
+        "enum": [
+          "markdown_lines",
+          "text_lines",
+          "word_paragraph",
+          "word_table",
+          "excel_range",
+          "pdf_page",
+          "qa_fields"
+        ],
+        "title": "LocatorKind",
+        "type": "string"
+      },
+      "ModelIdentity": {
+        "additionalProperties": false,
+        "description": "An exact tag is an alias; only a resolved digest pins model bytes.\n\nAn adapter must compare this identity with a fresh runtime observation before\nevery call. A mutable tag alone cannot promise reproducible results.",
+        "properties": {
+          "digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Digest"
+          },
+          "exact_tag": {
+            "minLength": 1,
+            "title": "Exact Tag",
+            "type": "string"
+          },
+          "identity_status": {
+            "default": "unresolved",
+            "enum": [
+              "resolved",
+              "unresolved"
+            ],
+            "title": "Identity Status",
+            "type": "string"
+          },
+          "model_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Model Id",
+            "type": "string"
+          },
+          "runtime_target_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Runtime Target Id"
+          }
+        },
+        "required": [
+          "model_id",
+          "exact_tag"
+        ],
+        "title": "ModelIdentity",
+        "type": "object"
+      },
+      "ModelRole": {
+        "enum": [
+          "generator",
+          "rewriter",
+          "support_checker",
+          "reranker",
+          "embedder",
+          "token_counter"
+        ],
+        "title": "ModelRole",
+        "type": "string"
+      },
+      "PinnedKBTarget": {
+        "additionalProperties": false,
+        "description": "An authorized KB resolved to its immutable version before retrieval.",
+        "properties": {
+          "kb_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Kb Id",
+            "type": "string"
+          },
+          "version_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Version Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kb_id",
+          "version_id"
+        ],
+        "title": "PinnedKBTarget",
+        "type": "object"
+      },
+      "ResolvedScope": {
+        "additionalProperties": false,
+        "properties": {
+          "policy_version": {
+            "default": "p2-keyword",
+            "title": "Policy Version",
+            "type": "string"
+          },
+          "resolved_at": {
+            "format": "date-time",
+            "title": "Resolved At",
+            "type": "string"
+          },
+          "scope_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Scope Id",
+            "type": "string"
+          },
+          "targets": {
+            "items": {
+              "$ref": "#/$defs/PinnedKBTarget"
+            },
+            "minItems": 1,
+            "title": "Targets",
+            "type": "array"
+          }
+        },
+        "required": [
+          "scope_id",
+          "targets"
+        ],
+        "title": "ResolvedScope",
+        "type": "object"
+      },
+      "RetrievalCompletedData": {
+        "additionalProperties": false,
+        "properties": {
+          "hit_count": {
+            "minimum": 0,
+            "title": "Hit Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "hit_count"
+        ],
+        "title": "RetrievalCompletedData",
+        "type": "object"
+      },
+      "RetrievalCompletedV2": {
+        "additionalProperties": false,
+        "properties": {
+          "answer_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Answer Id",
+            "type": "string"
+          },
+          "binding_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Binding Id"
+          },
+          "data": {
+            "$ref": "#/$defs/RetrievalCompletedData"
+          },
+          "event": {
+            "const": "retrieval.completed",
+            "default": "retrieval.completed",
+            "title": "Event",
+            "type": "string"
+          },
+          "inference_revision": {
+            "minimum": 0,
+            "title": "Inference Revision",
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 2,
+            "default": 2,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "scope_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Id"
+          },
+          "scope_revision": {
+            "minimum": 0,
+            "title": "Scope Revision",
+            "type": "integer"
+          },
+          "seq": {
+            "minimum": 1,
+            "title": "Seq",
+            "type": "integer"
+          },
+          "session_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Session Id",
+            "type": "string"
+          },
+          "timestamp": {
+            "format": "date-time",
+            "title": "Timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "answer_id",
+          "session_id",
+          "seq",
+          "scope_revision",
+          "inference_revision",
+          "binding_id",
+          "scope_id",
+          "data"
+        ],
+        "title": "RetrievalCompletedV2",
+        "type": "object"
+      },
+      "RoleBinding": {
+        "additionalProperties": false,
+        "properties": {
+          "budget_tokens": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Budget Tokens"
+          },
+          "identity": {
+            "$ref": "#/$defs/ModelIdentity"
+          },
+          "location": {
+            "$ref": "#/$defs/ExecutionLocation",
+            "default": "local"
+          },
+          "policy": {
+            "$ref": "#/$defs/InferencePolicy"
+          },
+          "role": {
+            "$ref": "#/$defs/ModelRole"
+          },
+          "runtime_target_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Runtime Target Id"
+          },
+          "timeout_ms": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Timeout Ms"
+          }
+        },
+        "required": [
+          "role",
+          "policy",
+          "identity"
+        ],
+        "title": "RoleBinding",
+        "type": "object"
+      },
+      "SelectionResolvedData": {
+        "additionalProperties": false,
+        "properties": {
+          "resolved_scope": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ResolvedScope"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "result": {
+            "$ref": "#/$defs/SelectionResult"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "SelectionResolvedData",
+        "type": "object"
+      },
+      "SelectionResolvedV2": {
+        "additionalProperties": false,
+        "properties": {
+          "answer_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Answer Id",
+            "type": "string"
+          },
+          "binding_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Binding Id"
+          },
+          "data": {
+            "$ref": "#/$defs/SelectionResolvedData"
+          },
+          "event": {
+            "const": "selection.resolved",
+            "default": "selection.resolved",
+            "title": "Event",
+            "type": "string"
+          },
+          "inference_revision": {
+            "minimum": 0,
+            "title": "Inference Revision",
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 2,
+            "default": 2,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "scope_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Id"
+          },
+          "scope_revision": {
+            "minimum": 0,
+            "title": "Scope Revision",
+            "type": "integer"
+          },
+          "seq": {
+            "minimum": 1,
+            "title": "Seq",
+            "type": "integer"
+          },
+          "session_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Session Id",
+            "type": "string"
+          },
+          "timestamp": {
+            "format": "date-time",
+            "title": "Timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "answer_id",
+          "session_id",
+          "seq",
+          "scope_revision",
+          "inference_revision",
+          "binding_id",
+          "scope_id",
+          "data"
+        ],
+        "title": "SelectionResolvedV2",
+        "type": "object"
+      },
+      "SelectionResult": {
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "enum": [
+              "explicit",
+              "auto"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "policy_version": {
+            "default": "p2-keyword",
+            "title": "Policy Version",
+            "type": "string"
+          },
+          "reason": {
+            "default": "",
+            "title": "Reason",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/$defs/SelectionStatus"
+          },
+          "targets": {
+            "items": {
+              "$ref": "#/$defs/PinnedKBTarget"
+            },
+            "title": "Targets",
+            "type": "array"
+          }
+        },
+        "required": [
+          "status",
+          "mode"
+        ],
+        "title": "SelectionResult",
+        "type": "object"
+      },
+      "SelectionStatus": {
+        "enum": [
+          "resolved",
+          "no_match",
+          "needs_clarification"
+        ],
+        "title": "SelectionStatus",
+        "type": "string"
+      }
+    },
+    "discriminator": {
+      "mapping": {
+        "answer.accepted": "#/$defs/AnswerAcceptedV2",
+        "answer.cancelled": "#/$defs/AnswerCancelledV2",
+        "answer.completed": "#/$defs/AnswerCompletedV2",
+        "answer.delta": "#/$defs/AnswerDeltaV2",
+        "answer.failed": "#/$defs/AnswerFailedV2",
+        "answer.refused": "#/$defs/AnswerRefusedV2",
+        "citation.ready": "#/$defs/CitationReadyV2",
+        "inference.bound": "#/$defs/InferenceBoundV2",
+        "retrieval.completed": "#/$defs/RetrievalCompletedV2",
+        "selection.resolved": "#/$defs/SelectionResolvedV2"
+      },
+      "propertyName": "event"
+    },
+    "oneOf": [
+      {
+        "$ref": "#/$defs/AnswerAcceptedV2"
+      },
+      {
+        "$ref": "#/$defs/InferenceBoundV2"
+      },
+      {
+        "$ref": "#/$defs/SelectionResolvedV2"
+      },
+      {
+        "$ref": "#/$defs/RetrievalCompletedV2"
+      },
+      {
+        "$ref": "#/$defs/CitationReadyV2"
+      },
+      {
+        "$ref": "#/$defs/AnswerDeltaV2"
+      },
+      {
+        "$ref": "#/$defs/AnswerCompletedV2"
+      },
+      {
+        "$ref": "#/$defs/AnswerRefusedV2"
+      },
+      {
+        "$ref": "#/$defs/AnswerFailedV2"
+      },
+      {
+        "$ref": "#/$defs/AnswerCancelledV2"
+      }
+    ]
+  },
   "answer_events": {
     "ids": "answer_id and session_id on every event",
     "replay": "Last-Event-ID maps to seq; duplicates are dropped by the client",
@@ -124,6 +2165,16 @@
       "answer.refused",
       "answer.failed",
       "answer.cancelled"
+    ]
+  },
+  "available_versions": {
+    "answer": [
+      1,
+      2
+    ],
+    "job": [
+      1,
+      2
     ]
   },
   "error_codes": {
@@ -159,6 +2210,29 @@
     "job": [
       "job.accepted",
       "job.progress",
+      "job.completed",
+      "job.failed",
+      "job.cancelled"
+    ]
+  },
+  "event_types_v2": {
+    "answer": [
+      "answer.accepted",
+      "answer.cancelled",
+      "answer.completed",
+      "answer.delta",
+      "answer.failed",
+      "answer.refused",
+      "citation.ready",
+      "inference.bound",
+      "retrieval.completed",
+      "selection.resolved"
+    ],
+    "job": [
+      "job.accepted",
+      "job.progress",
+      "job.cancel_requested",
+      "job.outcome_unknown",
       "job.completed",
       "job.failed",
       "job.cancelled"
@@ -279,9 +2353,129 @@
     "title": "JobEvent",
     "type": "object"
   },
+  "job_event_v2": {
+    "additionalProperties": false,
+    "description": "New install/recovery states never overload the persisted v1 event enum.",
+    "properties": {
+      "bytes_downloaded": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Bytes Downloaded"
+      },
+      "diagnostic": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Diagnostic"
+      },
+      "event": {
+        "enum": [
+          "job.accepted",
+          "job.progress",
+          "job.cancel_requested",
+          "job.outcome_unknown",
+          "job.completed",
+          "job.failed",
+          "job.cancelled"
+        ],
+        "title": "Event",
+        "type": "string"
+      },
+      "job_id": {
+        "maxLength": 256,
+        "minLength": 1,
+        "title": "Job Id",
+        "type": "string"
+      },
+      "phase": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Phase"
+      },
+      "progress": {
+        "anyOf": [
+          {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Progress"
+      },
+      "schema_version": {
+        "const": 2,
+        "default": 2,
+        "title": "Schema Version",
+        "type": "integer"
+      },
+      "seq": {
+        "minimum": 1,
+        "title": "Seq",
+        "type": "integer"
+      },
+      "timestamp": {
+        "format": "date-time",
+        "title": "Timestamp",
+        "type": "string"
+      },
+      "total_bytes": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Total Bytes"
+      }
+    },
+    "required": [
+      "job_id",
+      "seq",
+      "event"
+    ],
+    "title": "JobEventV2",
+    "type": "object"
+  },
   "job_events": {
     "bytes_unknown": "total_bytes may be null; no percentage is invented",
     "ids": "job_id on every event; never fabricates an answer_id"
   },
-  "schema_version": 1
+  "latest_schema_version": 2,
+  "legacy_schema_version": 1,
+  "schema_version": 1,
+  "version_policy": {
+    "delivery": "contract only; answer SSE and Job SSE are not active",
+    "v1": "readable legacy replay; no v2-only events or required fields",
+    "v2": "new answer revision rules and explicit job reconciliation events",
+    "wire_selector": "schema_version in each persisted event"
+  }
 }

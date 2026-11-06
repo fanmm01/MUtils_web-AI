@@ -12,10 +12,12 @@ import json
 import sys
 from pathlib import Path
 
-from qa_contracts.answers import AnswerEvent
-from qa_contracts.base import EVENT_SCHEMA_VERSION, HTTP_SCHEMA_VERSION
+from pydantic import TypeAdapter
+
+from qa_contracts.answers import AnswerEvent, AnswerEventV2Wire
+from qa_contracts.base import HTTP_SCHEMA_VERSION
 from qa_contracts.errors import STATUS_BY_CODE, ErrorCode
-from qa_contracts.operations import JobEvent
+from qa_contracts.operations import JobEvent, JobEventV2
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCS = ROOT / "docs"
@@ -32,10 +34,30 @@ def export_openapi(app, path: Path) -> dict[str, object]:
 def build_event_schema() -> dict[str, object]:
     """SSE contract: answer and job events are separate shapes with stable IDs."""
     return {
-        "schema_version": EVENT_SCHEMA_VERSION,
+        "schema_version": 1,
+        "legacy_schema_version": 1,
+        "latest_schema_version": 2,
         "http_schema_version": HTTP_SCHEMA_VERSION,
         "answer_event": AnswerEvent.model_json_schema(),
         "job_event": JobEvent.model_json_schema(),
+        "answer_event_v2": TypeAdapter(AnswerEventV2Wire).json_schema(),
+        "job_event_v2": JobEventV2.model_json_schema(),
+        "available_versions": {"answer": [1, 2], "job": [1, 2]},
+        "version_policy": {
+            "v1": "readable legacy replay; no v2-only events or required fields",
+            "v2": "new answer revision rules and explicit job reconciliation events",
+            "wire_selector": "schema_version in each persisted event",
+            "delivery": "contract only; answer SSE and Job SSE are not active",
+        },
+        "event_types_v2": {
+            "answer": list(
+                TypeAdapter(AnswerEventV2Wire).json_schema()["discriminator"]["mapping"]
+            ),
+            "job": [
+                "job.accepted", "job.progress", "job.cancel_requested",
+                "job.outcome_unknown", "job.completed", "job.failed", "job.cancelled",
+            ],
+        },
         "event_types": {
             "answer": [
                 "answer.accepted",

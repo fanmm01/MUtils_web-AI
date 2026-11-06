@@ -9,16 +9,18 @@
  */
 
 import type { CreateSession } from "./generated/openapi.js";
-import type { AnswerEvent, JobEvent } from "./generated/events.js";
+import type { AnswerEvent, AnswerEventV2, JobEvent, JobEventV2 } from "./generated/events.js";
 
 export type * from "./generated/openapi.js";
 export type {
   AnswerEvent,
+  AnswerEventV2,
   ErrorCode,
   EventSchemaVersion,
   HttpSchemaVersion,
   JobEvent,
   JobEventType,
+  JobEventV2,
 } from "./generated/events.js";
 
 /** Opaque server-generated identifier. */
@@ -32,25 +34,8 @@ export type Id = string;
 export type RetrievalSelection = NonNullable<CreateSession["selection"]>;
 export type SelectionMode = RetrievalSelection["mode"];
 
-/**
- * Error envelope of every non-2xx JSON response (`qa_contracts.errors.APIErrorResponse`).
- * Written here because `docs/openapi.json` does not export that model: its
- * routes only declare FastAPI's 422 `HTTPValidationError`, which the server
- * never sends (it rewrites validation errors into this envelope).
- */
-export interface ErrorDetail {
-  field?: string | null;
-  reason: string;
-}
+/** Stable error envelope exported from the server's OpenAPI responses. */
+export type ApiErrorBody = import("./generated/openapi.js").APIErrorResponse;
+export type ErrorDetail = import("./generated/openapi.js").ErrorDetail;
 
-export interface ApiErrorBody {
-  error: {
-    code: string;
-    message: string;
-    details: ErrorDetail[];
-  };
-  request_id: string;
-}
-
-/** An event delivered by an SSE stream; answer and job events share the parser. */
-export type SSEEvent = AnswerEvent | JobEvent;
+export type { SSEEvent } from "./sse.js";

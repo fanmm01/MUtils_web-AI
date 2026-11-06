@@ -154,6 +154,7 @@ class SelectionResult(ContractModel):
 class ResolvedScope(ContractModel):
     scope_id: ID
     targets: Annotated[list[PinnedKBTarget], Field(min_length=1)]
+    policy_version: str = "p2-keyword"
     resolved_at: AwareDatetime = Field(default_factory=utc_now)
 
     @model_validator(mode="after")

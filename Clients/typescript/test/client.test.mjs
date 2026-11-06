@@ -68,8 +68,16 @@ await authed.getKB("kb");
 assert.equal(authCalls[0].headers.Authorization, "Bearer token-value");
 
 const install = { preview_id: "p1", preview_hash: "h", confirmed: true };
+const conflict = {
+  kb_id: "kb1", source_id: "src1", preview_id: "prev1", expected_preview_hash: "h",
+  expected_active_version_id: null,
+  decisions: [{ strategy: "keep_manual", source_id: "src1", relative_path: "a.md",
+    document_id: "doc1", source_baseline_revision_id: "r1", manual_revision_id: "r2",
+    source_baseline_digest: "sha256:before" }],
+};
 const beforeJobs = authCalls.length;
 assert.throws(() => authed.confirmInstall(install), /Idempotency-Key is required/);
+assert.throws(() => authed.resolveImportConflicts("kb1", "prev1", conflict), /Idempotency-Key is required/);
 assert.throws(
   () => authed.verifyModel("m1", { roles: ["generator"] }, { idempotencyKey: " " }),
   /Idempotency-Key is required/,
@@ -77,8 +85,10 @@ assert.throws(
 assert.equal(authCalls.length, beforeJobs);
 await authed.confirmInstall(install, { idempotencyKey: "install-key" });
 await authed.verifyModel("m1", { roles: ["generator"] }, { idempotencyKey: "verify-key" });
-assert.equal(authCalls.at(-2).headers["Idempotency-Key"], "install-key");
-assert.equal(authCalls.at(-1).headers["Idempotency-Key"], "verify-key");
+await authed.resolveImportConflicts("kb1", "prev1", conflict, { idempotencyKey: "resolve-key" });
+assert.equal(authCalls.at(-3).headers["Idempotency-Key"], "install-key");
+assert.equal(authCalls.at(-2).headers["Idempotency-Key"], "verify-key");
+assert.equal(authCalls.at(-1).headers["Idempotency-Key"], "resolve-key");
 
 const credentialCalls = [];
 const redirectedCalls = [];
@@ -101,5 +111,7 @@ assert.equal(credentialCalls.length, 0, "invalid paths must be rejected before r
 assert.equal(redirectedCalls.length, 0, "invalid paths must never reach fetch");
 await secured.request("GET", "/v1/kbs");
 assert.equal(redirectedCalls[0].url, "http://127.0.0.1:8000/v1/kbs");
+
+await assert.rejects(() => secured.stream("/v1/jobs/j1/events"), /SSE response must use text\/event-stream/);
 
 console.log("typescript scaffold tests passed");

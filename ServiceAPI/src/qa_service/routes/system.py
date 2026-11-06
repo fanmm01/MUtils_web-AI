@@ -21,6 +21,9 @@ class Readiness(ContractModel):
     ready: bool
     reason: str
     mode: str
+    management_api_ready: bool | None = None
+    retrieval_roles_ready: bool | None = None
+    answer_roles_ready: bool | None = None
 
 
 class CapabilitiesBody(ContractModel):
@@ -38,11 +41,14 @@ async def health(container: ContainerDep) -> Health:
 
 @router.get("/readyz", response_model=Readiness, status_code=503)
 async def readiness(container: ContainerDep) -> Readiness:
-    # The scaffold has no database, no worker and no provider: never ready.
+    # Gate has no readiness probes; unknown is distinct from passing any check.
     return Readiness(
         ready=False,
-        reason="scaffold build has no persistence, worker or model provider",
+        reason="full readiness is not verified; management and model roles require separate probes",
         mode=container.mode,
+        management_api_ready=None,
+        retrieval_roles_ready=None,
+        answer_roles_ready=None,
     )
 
 

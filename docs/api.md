@@ -9,11 +9,11 @@
 - 响应头 `X-Request-ID`：服务端回显调用方提供的值，否则生成新的 ID；错误体中的 `request_id` 与之一致。
 - 时间均为 UTC、带时区；列表使用游标分页（`limit`、`cursor`）。
 - ID 均为服务端生成的不透明字符串；客户端不得解析其结构。
-- HTTP 请求/响应契约版本为 `2`（健康检查、capabilities 及请求 fixtures）；SSE 事件仍使用 `schema_version=1`，以便重放 P1 已保存的事件。事件版本不是 HTTP 版本，旧 HTTP v1 请求不保证兼容新的导入接口。
+- HTTP 请求/响应契约仍为 `2`：冲突 resolve 新端点和既有响应的可选字段是兼容扩展；旧 HTTP v1 的上传/导入不保证兼容。事件默认/wire legacy version 为 v1，latest version 为 v2；每条新事件携带版本并按记录分支读取，不能将 v2 必填修订或 Job 新事件塞进旧 v1。
 
 ### 1.1 错误封装
 
-所有非 2xx 响应（**包括参数校验 422**）使用同一错误信封；目前 OpenAPI 对该信封的声明尚不完整，P3 Gate 必须冻结响应形状和状态映射：
+所有非 2xx 错误响应（**包括参数校验 422**）使用同一错误信封；OpenAPI 已按 `APIErrorResponse` 导出其字段/状态映射。例外：`GET /readyz` 的 503 是正常 `Readiness` 状态，不是错误信封：
 
 ```json
 {
@@ -51,7 +51,7 @@
 | 方法 | 路径 | 当前模式行为 |
 | --- | --- | --- |
 | GET | `/healthz` | `200`；默认 scaffold 时 `{"status":"ok","mode":"scaffold","schema_version":2}`，运营模式显示 operational |
-| GET | `/readyz` | 当前实现始终 `503`，包括 operational 模式；不能把迁移/管理 API 可用等同于完整服务就绪（模型/问答仍缺失） |
+| GET | `/readyz` | 当前即使 operational 也返回 503，`ready=false`；管理 API、检索必要角色和问答必要角色分别为 `management_api_ready` / `retrieval_roles_ready` / `answer_roles_ready`，Gate 均为 `null`（未探测），不是 false 或成功。后续 A1 必须有真实探测结果才可将任一分项设为 true，整站 ready 须以全部必备角色/服务就绪为前提，模型清单非空并不够。 |
 | GET | `/v1/capabilities` | `200`，分别列出当前已实现/未实现功能与选库上限 |
 
 ## 3. 业务接口（P2 当前状态）
@@ -60,7 +60,7 @@
 
 **知识库**：`GET/POST /v1/kbs`，`GET/PATCH/DELETE /v1/kbs/{kb_id}`，`GET /v1/kbs/{kb_id}/documents`，`POST /v1/kbs/{kb_id}/documents`，`GET/POST /v1/kbs/{kb_id}/qa-pairs`，`GET/PATCH/DELETE /v1/qa-pairs/{qa_id}`，`GET/PATCH/DELETE /v1/documents/{document_id}`。
 
-**导入与来源**：`POST /v1/kbs/{kb_id}/imports/preview`，`POST /v1/kbs/{kb_id}/imports`，`GET/POST /v1/kbs/{kb_id}/sources`，`GET/PATCH/DELETE /v1/sources/{source_id}`，`POST /v1/sources/{source_id}/sync`，`GET /v1/source-roots`，`POST /v1/source-roots/{root_id}/scan`，`POST /v1/uploads`，`PUT /v1/uploads/{batch_id}/files`，`POST /v1/uploads/{batch_id}/complete`。
+**导入与来源**：`POST /v1/kbs/{kb_id}/imports/preview`，`POST /v1/kbs/{kb_id}/imports/{preview_id}/resolve`（Gate 仅声明契约/返回 501），`POST /v1/kbs/{kb_id}/imports`，`GET/POST /v1/kbs/{kb_id}/sources`，`GET/PATCH/DELETE /v1/sources/{source_id}`，`POST /v1/sources/{source_id}/sync`，`GET /v1/source-roots`，`POST /v1/source-roots/{root_id}/scan`，`POST /v1/uploads`，`PUT /v1/uploads/{batch_id}/files`，`POST /v1/uploads/{batch_id}/complete`。
 
 **版本**：`GET /v1/kbs/{kb_id}/versions`，`GET /v1/versions/{version_id}`，`POST /v1/versions/{version_id}/publish`，`POST /v1/kbs/{kb_id}/publish`，`POST /v1/kbs/{kb_id}/rollback`，`GET /v1/kbs/{kb_id}/version-diff`。
 
@@ -77,7 +77,9 @@
 ## 4. 导入、上传与镜像确认（P2 operational）
 
 - `POST /v1/uploads` 接收 `{source_id, selection?, files:[{relative_path,digest,size}]}`，返回 `{batch_id,source_id}`；selection 记录客户端选择范围，不能自行授权删除，客户端也不可提交 `complete`。`PUT /v1/uploads/{batch_id}/files?relative_path=...` 使用原始字节、逐文件核验 hash/size；失败不得当成成功继续。`POST /v1/uploads/{batch_id}/complete` 返回服务端验证的 `SourceManifest`，包含 `scan_scope`、`scan_status`、`complete`；部分上传/失败不触发 mirror 删除，批次核验后内容单独存放。
-- `POST /v1/kbs/{kb_id}/imports/preview` 接受 `ImportPreviewRequest`（kb_id/source_id/mode/selection），预览不删除。确认的 `ImportRequest` 带非空 `expected_preview_hash`，服务端复验来源、范围、baseline、文件集及字节，变化返回 409；成功仅入队，worker 构建 READY 版本，仍需显式发布。未完成或失败的导入不变更活动指针。
+- `POST /v1/kbs/{kb_id}/imports/preview` 接受 `ImportPreviewRequest`（kb_id/source_id/mode/selection），预览不删除。兼容返回仍含 `conflicts: string[]`；新 `ImportPreview.conflict_details` 已冻结，用于原文档/修订及旧/新来源摘要，**当前 P2 ImportService 尚未填充该字段**（返回默认空数组）；A1 冲突短补必须以服务端修订/基线生成，而非相信客户端提交。确认的 `ImportRequest` 带非空 `expected_preview_hash`，服务端复验来源、范围、baseline、文件集及字节，变化返回 409；成功仅入队，worker 构建 READY 版本，仍需显式发布。未完成或失败的导入不变更活动指针。
+- **P3 冲突契约（A1 尚未实现）**：发生手工/来源冲突时旧请求不带 `resolution_id` 继续 409。`POST /v1/kbs/{kb_id}/imports/{preview_id}/resolve` 必须有 `Idempotency-Key`，请求显式带 `kb_id`、`source_id`、`preview_id`、`expected_preview_hash`、`expected_active_version_id`（无活动版本时显式 null）以及对每个冲突唯一的 `decisions`：`keep_manual`（保留手工版并记录来源分歧）、`use_source`（采用来源，旧手工修订保留历史引用）、`fork_document`（服务端创建独立手工文档，不改变来源映射）。每项绑定原文档 ID、旧来源修订/摘要、现手工修订与新来源摘要（源文件删除可为 null）；不接受客户端自选 fork 目标 ID。服务端预览/决策/apply/worker 均按源/修订/活动版本/权限作 CAS；同主体同键同请求复用决策，同键异请求、过期预览或并发漂移返回 409。响应是不可变 `ImportResolution`，包含 `resolution_id`、主体、请求摘要和过期时间；resolve 本身不更改文档，apply 才能引用。**Gate 实际 resolve 与带 resolution_id 的 apply 均返回 501；fake 的三策略通过不代表真实写入已交付。A1 仓储端口只接受服务端 `AccessScope` 并从中取主体，不接受调用者伪造的 principal_id。**
+- P2 关键词快照保留 `vector_index=absent` 可读；P3 `present` 须同时固化 `vector_index_ref` 和可核验完整 `embedding_fingerprint`（运行时与模型完整摘要、维度、归一化、预处理、截断策略）。维度/身份不合格或索引构建失败时不发布，A1 后续以快照事务落实。
 - 最终 `ResolvedScope.targets` 必须非空、每库至多一次、每项含不可变 `version_id`；请求 `explicit.targets` 仍允许省略 version_id，在执行前固定。关键词读取使用带 kb/version、keyword profile 和 index ref 的单库 `SearchScope`，由受权 SnapshotReader 返回；不能混用多个库的原始 BM25 分数。
 
 ## 5. 选库请求
@@ -106,9 +108,9 @@
 
 ## 6. 模型发现与安装（P3 计划，当前 501）
 
-以下请求/响应为 Contract Gate 草案，不代表 P2 的运行时已可发现、安装、核验或调用。
+以下请求/响应形状已在 P3 Gate 冻结，**并非**运行时已可发现、安装、核验或调用。服务端目标 allow-list、管理权限在真实 A1 适配层执行；当前本机单用户 `PrincipalDep` 只是固定 operator，不能称为真实认证。
 
-- 发现请求只接受 `{"target_ids": ["ollama"]}`；URL、路径、凭据等字段因 `extra="forbid"` 被拒绝。目标必须在服务端 allow-list 中。
+- 发现请求只接受 `{"target_ids": ["ollama"]}`；URL、路径、凭据等字段因 `extra="forbid"` 被拒绝。发现端口用 `AccessScope.can_manage_models` 和服务端 `RuntimeTarget` allow-list 预检，不因清单有可用模型就自动赋角色或下载。`ModelIdentity` 的 exact tag 是可变别名，只有经过适配器核对的完整 `sha256:<64 hex>` 才可标记 resolved；identity 漂移阻断调用，未知身份不得声称向量快照可复现。`InferenceProfile` 用不可变 revision 固定角色；`InferenceBinding` 对每个候选库版本明确 embedder 指纹，并按生成/支持校验/重排/计数等实际角色校验本地策略、执行位置和预算；`local_only` 不允许远程 fallback。
 - 安装两步走，没有捷径：
 
 ```json
@@ -116,7 +118,7 @@ POST /v1/model-installs/preview
 {"target_id": "ollama", "model_ref": "qwen3:8b"}
 ```
 
-返回 `preview_id`、`preview_hash`、身份状态、已知大小/缺失层数和未知项。预览不下载任何数据。
+返回 `preview_id`、`preview_hash`、身份状态、已知大小/缺失层数、服务端 allow-list runtime target/执行位置、不透明的 target-cache label、主体/有效期及未知项；请求内无任意 URL/路径/凭据。过期、主体不符、已知摘要/目标漂移时拒绝确认。ModelInstaller.preview只接受服务器allow-list target_id和访问权限，端口显式接收 AccessScope；start 必须接收确认预览、访问范围、必填幂等键和请求摘要。
 
 ```json
 POST /v1/model-installs
@@ -124,19 +126,19 @@ Idempotency-Key: <client-generated>
 {"preview_id": "…", "preview_hash": "…", "confirmed": true}
 ```
 
-`confirmed` 必须为 `true` 且 `preview_id`/`preview_hash` 匹配未过期的预览。CLI 的 `install-confirm` 要求显式 `--yes`。
+`confirmed` 必须为 `true` 且 `preview_id`/`preview_hash` 匹配未过期的预览；同主体、目标、摘要及请求的幂等键不重复下载，同键异请求拒绝。取消先进入 `cancel_requested`，不能从关闭 HTTP 连接推断取消成功；不明上游结果记 `outcome_unknown` 待对账，不重放结果不明的计费模型调用。实际下载、对账和磁盘/身份复验仍属 A1。CLI 的 `install-confirm` 要求显式 `--yes`。
 
 ## 7. SSE 事件（P3 目标契约；P2 Job 仍为 JSON 回放）
 
-- P2 已持久化 Job 事件；`GET /v1/jobs/{job_id}/events` 接收 `Last-Event-ID`，返回 JSON 事件信封列表并使用 `job_id`、`seq`。目前**没有**实时 SSE 输出或心跳，前端通过轮询实现任务进度。
-- 回答事件端点 `/v1/answers/{answer_id}/events` 当前有效请求 501；以下答案与 Job SSE 序列约束将在 P3 Gate 冻结并实现，不把 P2 的 JSON 直接称为 `text/event-stream`。
-- 断线重连（P3 SSE 目标）：请求头 `Last-Event-ID: <seq>`，服务端从下一条事件续传；客户端应丢弃重复 `seq`。P2 的 JSON Job 回放已接受该头但不提供连续流。
+- P2 已持久化 Job v1 事件；`GET /v1/jobs/{job_id}/events` 默认返回 `application/json` 的 `JobEventEnvelope[]`（`id`、`event`、`data`），`Last-Event-ID: <seq>` 只读后续记录。`Accept: text/event-stream` 当前明确返回 `501 FEATURE_NOT_IMPLEMENTED`，不会静默发送 JSON 冒充流；P3 A1 实现 SSE 后同 URL 以 Accept/Content-Type 区分，授权/续传仍须逐次验证。
+- `GET /v1/answers/{answer_id}/events` 当前有效请求 501，其 `text/event-stream` OpenAPI 媒体类型只保留目标契约。答案 v1/Job v1 均保持原 JSONL 可读；v2 答案强制在 `answer.accepted` 写定 `scope_revision`/`inference_revision`，绑定前 `binding_id`、范围固定前 `scope_id` 为 null，引用 `citation.ready` 先于被引用的 `answer.delta`，终态唯一，最终 JSON 的正文/引用与已校验事件一致。Job v2 新增 `job.cancel_requested`、`job.outcome_unknown`（非成功终态，须对账），不能写入旧 v1 事件类型。每条事件带版本的读取分支由 `parse_answer_event`/`parse_job_event` 处理，版本混用、未知类型明确拒绝。
+- 断线重连（P3 SSE 目标）：请求头 `Last-Event-ID: <seq>`，服务端从下一条事件续传；客户端应丢弃重复 `seq`。P2 的 Job JSON 已接受该头但不提供连续流；旧 v1 事件先读后按版本发送，不能重写成 v2。
 - 回答的四个终态（P3）`answer.completed`、`answer.refused`、`answer.failed`、`answer.cancelled` 恰好出现一个；终态之后不得再有事件。
 - 心跳（P3）以 SSE 注释形式发送；客户端解析器必须忽略注释行。
 - 事件类型全集与 payload schema 见 [events.schema.json](events.schema.json)。
 
 ## 8. 客户端
 
-- Python：[Clients/python/](../Clients/python/) 的 `qa_client.Client`，错误映射为 `QAError(code, message, status, details, request_id)`。
+- Python：[Clients/python/](../Clients/python/) 的 `qa_client.Client`，错误映射为 `QAError(code, message, status, details, request_id)`；`job_events` 用回放头而非查询参数，`subscribe_*` 拒绝非 SSE 媒体类型。
 - CLI：`qa --help`；未实现命令以退出码 `3` 结束，并在 stderr 输出 JSON 错误。
 - TypeScript：`Clients/typescript/` 的 `@qa/client`，提供 `createClient`、`subscribeAnswer`、`subscribeJob`；凭据由宿主注入，不落盘。

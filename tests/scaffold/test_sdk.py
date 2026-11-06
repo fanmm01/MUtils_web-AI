@@ -100,6 +100,40 @@ def test_model_job_clients_send_required_idempotency_header() -> None:
     assert len(seen) == 2
 
 
+def test_python_conflict_resolver_sends_required_idempotency_key() -> None:
+    seen: list[tuple[str, str | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.url.path, request.headers.get("Idempotency-Key")))
+        return httpx.Response(501, json={
+            "error": {"code": "FEATURE_NOT_IMPLEMENTED", "message": "not yet", "details": []},
+            "request_id": "r",
+        })
+
+    client = _client(handler)
+    with pytest.raises(ValueError, match="required"):
+        client.resolve_import_conflicts("kb1", "preview1", {}, " ")
+    with pytest.raises(QAError):
+        client.resolve_import_conflicts("kb1", "preview1", {}, "resolve-1")
+    assert seen == [
+        ("/v1/kbs/kb1/imports/preview1/resolve", "resolve-1"),
+    ]
+
+
+def test_job_json_cursor_uses_replay_header_and_rejects_json_as_sse() -> None:
+    seen: list[tuple[str | None, str | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.headers.get("Last-Event-ID"), request.headers.get("Accept")))
+        return httpx.Response(200, json=[])
+
+    client = _client(handler)
+    assert list(client.job_events("j1", 4)) == []
+    with pytest.raises(QAError, match="expected text/event-stream job events"):
+        list(client.subscribe_job("j1", 4))
+    assert seen == [("4", "application/json"), ("4", "text/event-stream")]
+
+
 def test_upload_rejects_symlinks_before_any_network_request(tmp_path) -> None:
     root = tmp_path / "upload"
     root.mkdir()

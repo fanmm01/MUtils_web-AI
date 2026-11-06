@@ -9,7 +9,17 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import BinaryIO, Protocol, runtime_checkable
 
-from .answers import AnswerContext, CitationDetail, DraftFragment, Hit, SearchResult
+from .answers import (
+    AnswerContext,
+    AnswerEvent,
+    AnswerEventV2,
+    CitationDetail,
+    DraftFragment,
+    GenerationRequest,
+    Hit,
+    SearchRequest,
+    SearchResult,
+)
 from .base import ID, Page
 from .knowledge import (
     Chunk,
@@ -22,7 +32,7 @@ from .knowledge import (
     UploadBatch,
     UploadManifest,
 )
-from .models import EmbeddingProfile, RoleBinding
+from .models import EmbeddingProfile, InferenceBinding, RoleBinding
 from .operations import AccessScope
 from .selection import CatalogQuery, KBDescriptor, KBTarget, PinnedKBTarget, ResolvedScope
 
@@ -93,7 +103,9 @@ class KeywordIndexWriter(Protocol):
 
 @runtime_checkable
 class VectorIndexWriter(Protocol):
-    async def build(self, vectors: list[list[float]], mapping: list[ID]) -> str: ...
+    async def build(
+        self, vectors: list[list[float]], mapping: list[ID], profile: EmbeddingProfile
+    ) -> str: ...
 
 
 @runtime_checkable
@@ -106,13 +118,13 @@ class Embedder(Protocol):
 @runtime_checkable
 class Generator(Protocol):
     def stream(
-        self, request: object, binding: RoleBinding
+        self, request: GenerationRequest, binding: RoleBinding
     ) -> AsyncIterator[DraftFragment]: ...
 
 
 @runtime_checkable
 class TokenCounter(Protocol):
-    async def count(self, request: object, binding: RoleBinding) -> TokenCount: ...
+    async def count(self, request: GenerationRequest, binding: RoleBinding) -> TokenCount: ...
 
 
 @runtime_checkable
@@ -171,12 +183,13 @@ class QAServicePort(Protocol):
     """The narrow surface the application layer consumes from the QA core."""
 
     async def search(
-        self, request: object, scope: ResolvedScope, binding: object
+        self, request: SearchRequest, scope: ResolvedScope, binding: InferenceBinding
     ) -> SearchResult: ...
 
     def answer(
-        self, request: object, context: AnswerContext, scope: ResolvedScope, binding: object
-    ) -> AsyncIterator[object]: ...
+        self, request: GenerationRequest, context: AnswerContext,
+        scope: ResolvedScope, binding: InferenceBinding
+    ) -> AsyncIterator[AnswerEvent | AnswerEventV2]: ...
 
 
 @runtime_checkable
