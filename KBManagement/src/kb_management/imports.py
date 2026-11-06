@@ -37,6 +37,38 @@ from qa_contracts.operations import Job, JobCommand, JobKind
 from .indexing import BuildRequest, ChangePlanner, IndexBuilder
 
 
+async def _manual_conflicts(
+    content: object, sources: object, source_id: str, paths: set[str]
+) -> list[str]:
+    """Compare live revisions with the last successful source import."""
+    if not paths:
+        return []
+    baseline = await sources.get_active_manifest(source_id)
+    if baseline is None:
+        return []
+    imported = {entry.relative_path for entry in baseline.files}
+    revisions = await sources.get_baseline_revisions(source_id)
+    active_version = await sources.active_baseline_version(source_id)
+    active_revisions = (
+        await sources.get_baseline_revisions(source_id, active_version)
+        if active_version is not None
+        else {}
+    )
+    conflicts = []
+    for path in sorted(paths & imported):
+        document = await content.find_by_path(source_id, path)
+        # Source imports made after a rollback may be newer than the selected
+        # active version. They are not manual edits; only a revision not recorded
+        # as a source import is a real conflict.
+        if document is None or document.deleted or (
+            revisions.get(path) != document.latest_revision_id
+            and active_revisions.get(path) != document.latest_revision_id
+            and not await sources.is_import_revision(source_id, path, document.latest_revision_id)
+        ):
+            conflicts.append(path)
+    return conflicts
+
+
 @dataclass(slots=True)
 class SyncResult:
     changes: object
@@ -88,6 +120,7 @@ class ImportService:
         previews: object,
         jobs: object,
         builder: IndexBuilder | None = None,
+        content: object | None = None,
         files: FileResolver | None = None,
         local_roots: Mapping[str, Path] | None = None,
         upload_root: Path | None = None,
@@ -97,6 +130,7 @@ class ImportService:
         self._previews = previews
         self._jobs = jobs
         self._builder = builder
+        self._content = content or (builder._content if builder is not None else None)
         self._resolver = files or FileResolver({})
         self._local_roots = {key: Path(value) for key, value in (local_roots or {}).items()}
         self._upload_root = Path(upload_root) if upload_root is not None else None
@@ -114,10 +148,11 @@ class ImportService:
             raise ValidationFailed([_detail("source_id", "does not match the source")])
         if manifest.selection != req.selection:
             raise ValidationFailed([_detail("selection", "does not match the source manifest")])
-        previous = None
-        if await self._sources.has_baseline(req.source_id):
-            previous = await self._sources.get_manifest(req.source_id, "")
+        previous = await self._sources.get_active_manifest(req.source_id)
         change = ChangePlanner.diff(previous, manifest, req.mode)
+        conflicts = await self._conflicts(
+            req.source_id, set(change.modified + change.removed + change.unchanged)
+        )
         preview = ImportPreview(
             preview_id=f"prev_{uuid.uuid4().hex}",
             kb_id=req.kb_id,
@@ -125,7 +160,7 @@ class ImportService:
             added=change.added,
             modified=change.modified,
             removed=change.removed,
-            conflicts=[],
+            conflicts=conflicts,
         )
         await self._previews.save(
             preview, manifest, mode=req.mode, baseline_hash=baseline_hash(previous)
@@ -161,14 +196,19 @@ class ImportService:
             )
         if manifest.scan_status != "succeeded":
             raise ValidationFailed([_detail("manifest", "source scan did not succeed")])
-        current_baseline = (
-            await self._sources.get_manifest(req.source_id, "")
-            if await self._sources.has_baseline(req.source_id)
-            else None
-        )
+        current_baseline = await self._sources.get_active_manifest(req.source_id)
         if baseline_hash(current_baseline) != recorded_baseline:
             raise Conflict(
                 "the previewed source baseline", "another import changed the baseline"
+            )
+        if preview_record.conflicts or await self._conflicts(
+            req.source_id,
+            set(preview_record.modified + preview_record.removed)
+            | {entry.relative_path for entry in manifest.files},
+        ):
+            raise Conflict(
+                "unchanged source document revisions",
+                "manual edits conflict with this import; resolve before applying",
             )
         await self._verify(source, manifest)
         # The job key covers the preview *and* the baseline it was computed
@@ -183,6 +223,7 @@ class ImportService:
                 "mode": req.mode,
                 "preview_id": preview_record.preview_id,
                 "preview_hash": preview_record.preview_hash,
+                "baseline_hash": recorded_baseline,
                 "manifest": manifest.model_dump(mode="json"),
             },
             idempotency_key=(
@@ -190,6 +231,11 @@ class ImportService:
             ),
         )
         return await self._jobs.enqueue(command, f"job_{uuid.uuid4().hex}")
+
+    async def _conflicts(self, source_id: str, paths: set[str]) -> list[str]:
+        if self._content is None:
+            return []
+        return await _manual_conflicts(self._content, self._sources, source_id, paths)
 
     async def _verify(self, source: object, manifest: SourceManifest) -> None:
         paths = self.file_paths(source, manifest)
@@ -310,6 +356,8 @@ class ImportService:
                 manifest=manifest,
                 files=files,
                 mode=str(payload["mode"]),
+                expected_baseline_hash=str(payload["baseline_hash"])
+                if "baseline_hash" in payload else None,
                 should_cancel=should_cancel,
             )
         )

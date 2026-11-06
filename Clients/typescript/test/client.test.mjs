@@ -80,4 +80,26 @@ await authed.verifyModel("m1", { roles: ["generator"] }, { idempotencyKey: "veri
 assert.equal(authCalls.at(-2).headers["Idempotency-Key"], "install-key");
 assert.equal(authCalls.at(-1).headers["Idempotency-Key"], "verify-key");
 
+const credentialCalls = [];
+const redirectedCalls = [];
+const secured = createClient({
+  baseUrl: "http://127.0.0.1:8000",
+  getCredential: () => {
+    credentialCalls.push(true);
+    return "private-token";
+  },
+  fetch: async (url, init) => {
+    redirectedCalls.push({ url, init });
+    return new Response("{}", { status: 200 });
+  },
+});
+for (const path of ["@evil.example/collect", "//evil.example/collect", "/\\evil.example/collect"]) {
+  await assert.rejects(() => secured.request("GET", path), /API path must/);
+  await assert.rejects(() => secured.stream(path), /API path must/);
+}
+assert.equal(credentialCalls.length, 0, "invalid paths must be rejected before reading credentials");
+assert.equal(redirectedCalls.length, 0, "invalid paths must never reach fetch");
+await secured.request("GET", "/v1/kbs");
+assert.equal(redirectedCalls[0].url, "http://127.0.0.1:8000/v1/kbs");
+
 console.log("typescript scaffold tests passed");

@@ -394,17 +394,18 @@ test("job failure diagnostics, cancel and the cancel/complete race", async () =>
   fake.runWorker();
   await vi.waitFor(() => expect(failed.dataset.state).toBe("failed"));
   expect(failed.textContent).toContain("IMPORT_FAILED");
-  expect(failed.textContent).toContain("no indexable content");
+  expect(failed.textContent).toContain("one or more source files failed to index");
   expect(find<HTMLButtonElement>(failed, "button", "重新生成预览")).toBeTruthy();
 
-  // One corrupt file next to a good one: the job succeeds with a per-file failure.
+  // A bad file alongside a good one fails closed: no partial version is published.
   await upload(root, fake, { "good.md": "正常内容", "bad.pdf": "%CORRUPT% v2" });
   await preview(root, fake);
   const partial = await confirmImport(root);
   fake.runWorker();
-  await vi.waitFor(() => expect(partial.dataset.state).toBe("succeeded"));
+  await vi.waitFor(() => expect(partial.dataset.state).toBe("failed"));
   expect(partial.querySelectorAll("tr[data-status=failed]")).toHaveLength(1);
   expect(partial.textContent).toContain("PARSE_FAILED");
+  expect(fake.state.versions.size).toBe(0);
 
   // Cancel a queued job.
   await upload(root, fake, { "bad.pdf": "%CORRUPT% v3" });
@@ -457,6 +458,8 @@ test("mirror deletion needs explicit consent; a partial upload never deletes; a 
   expect(textOf(root)).toContain("这是部分上传");
   expect(callsTo(fake, "POST", "/v1/uploads").at(-1)?.body).toMatchObject({ selection: { relative_paths: ["a.md"] } });
   let result = await preview(root, fake, "mirror");
+  // The preview names the batch's own selection (the server rejects any other).
+  expect(callsTo(fake, "POST", /\/imports\/preview$/).at(-1)?.body).toMatchObject({ selection: { relative_paths: ["a.md"] } });
   expect(result.textContent).toContain("将删除0");
   expect(result.querySelector("input[name=confirm_removal]")).toBeNull();
 
@@ -481,6 +484,87 @@ test("mirror deletion needs explicit consent; a partial upload never deletes; a 
   confirmButton.click();
   await waitText(root, "这份预览已失效", "[aria-label=导入预览结果]");
   expect(confirmButton.disabled).toBe(true);
+});
+
+test("a directory with more than 200 files lists every file; only checked files are uploaded", async () => {
+  const { fake, root } = mountAdmin({
+    setup: (fake) => {
+      const kbId = fake.seedKB("大目录").kb_id;
+      seedUploadSource(fake, kbId);
+      return `#/imports?kb=${kbId}`;
+    },
+  });
+  await waitText(root, "上传本机目录 · 资料目录");
+  const entries: Record<string, string> = {};
+  for (let i = 0; i < 205; i += 1) entries[`f${String(i).padStart(3, "0")}.md`] = `第 ${i} 个文件`;
+  pickDirectory(root, "docs", entries);
+  // Every file is shown with its own checkbox; none is selected out of sight.
+  expect(root.querySelectorAll(".file-list input[type=checkbox]")).toHaveLength(205);
+  expect(textOf(root)).toContain("已在浏览器中选择 205 个文件，勾选 205 个");
+  await upload(root, fake, entries, ["f204.md"]);
+  const begin = callsTo(fake, "POST", "/v1/uploads").at(-1)?.body as { selection: { relative_paths?: string[] }; files: unknown[] };
+  expect(begin.files).toHaveLength(204);
+  expect(begin.selection.relative_paths).toHaveLength(204);
+  expect(begin.selection.relative_paths).not.toContain("f204.md");
+  const sent = callsTo(fake, "PUT", /\/files$/).map((call) => call.query.get("relative_path"));
+  expect(sent).toHaveLength(204);
+  expect(sent).not.toContain("f204.md");
+  expect(textOf(root)).toContain("服务端已核验 204 个文件。这是部分上传");
+});
+
+test("a partial upload keeps its selection through preview and confirm; mirror stays ineligible", async () => {
+  const { fake, root } = mountAdmin({
+    setup: (fake) => {
+      const kbId = fake.seedKB("部分上传").kb_id;
+      seedUploadSource(fake, kbId);
+      return `#/imports?kb=${kbId}`;
+    },
+  });
+  await waitText(root, "上传本机目录 · 资料目录");
+  await upload(root, fake, { "a.md": "甲", "b.md": "乙" });
+  await preview(root, fake);
+  const first = await confirmImport(root);
+  fake.runWorker();
+  await vi.waitFor(() => expect(first.dataset.state).toBe("succeeded"));
+
+  await upload(root, fake, { "a.md": "甲二", "b.md": "乙" }, ["b.md"]);
+  const result = await preview(root, fake, "mirror");
+  expect(result.textContent).toContain("将删除0");
+  expect(result.textContent).toContain("部分上传");
+  const card = await confirmImport(root);
+  const [request] = callsTo(fake, "POST", /\/imports$/).slice(-1);
+  expect(request?.body).toMatchObject({ mode: "mirror", selection: { relative_paths: ["a.md"] } });
+  fake.runWorker();
+  await vi.waitFor(() => expect(card.dataset.state).toBe("succeeded"));
+  // b.md was outside the partial batch: it stays in the new version.
+  const version = fake.state.versions.get(fake.state.jobs.get(card.dataset.jobId as string)?.job.result_version_id ?? "");
+  const docB = [...fake.state.documents.values()].find((item) => item.path === "b.md");
+  expect(Object.keys(version?.document_revisions ?? {})).toContain(docB?.doc.document_id);
+});
+
+test("previewing a partial batch uploaded earlier (e.g. before a reload) asks for a new upload", async () => {
+  const { fake, root } = mountAdmin({
+    setup: (fake) => {
+      const kbId = fake.seedKB("刷新后").kb_id;
+      const sourceId = seedUploadSource(fake, kbId);
+      fake.state.uploads.set(sourceId, {
+        source_id: sourceId,
+        files: [{ relative_path: "a.md", digest: "d", size: 1 }],
+        selection: { relative_paths: ["a.md"] },
+        scan_scope: "partial",
+        scan_status: "succeeded",
+        complete: false,
+        scanned_at: "2026-11-06T00:00:00Z",
+      });
+      return `#/imports?kb=${kbId}`;
+    },
+  });
+  await waitText(root, "上传本机目录 · 资料目录");
+  click(root, "生成导入预览");
+  await waitText(root, "生成导入预览：参数错误");
+  expect(textOf(root)).toContain("请重新选择目录并上传");
+  expect(root.querySelector("[aria-label=导入预览结果]")).toBeNull();
+  expect(fake.calls.some((call) => call.method === "POST" && /\/imports$/.test(call.path))).toBe(false);
 });
 
 test("server-side authorized root: create a source and sync it in merge mode", async () => {

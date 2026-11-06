@@ -132,6 +132,84 @@ const CALLS = {
   confirmInstall: (c) => c.confirmInstall({ preview_id: "p", preview_hash: "h", confirmed: true }, key),
   verifyModel: (c) => c.verifyModel("m1", { roles: ["generator"] }, key),
 };
+/** Independent method-to-operation mapping; coverage alone cannot detect two swapped SDK methods. */
+const EXPECTED_OPERATIONS = {
+  health: "health_healthz_get",
+  readiness: "readiness_readyz_get",
+  capabilities: "capabilities_v1_capabilities_get",
+  listKBs: "list_kbs_v1_kbs_get",
+  createKB: "create_kb_v1_kbs_post",
+  getKB: "get_kb_v1_kbs__kb_id__get",
+  updateKB: "update_kb_v1_kbs__kb_id__patch",
+  deleteKB: "delete_kb_v1_kbs__kb_id__delete",
+  publishKB: "publish_kb_v1_kbs__kb_id__publish_post",
+  listDocuments: "list_documents_v1_kbs__kb_id__documents_get",
+  createDocument: "create_document_v1_kbs__kb_id__documents_post",
+  getDocument: "get_document_v1_documents__document_id__get",
+  updateDocument: "update_document_v1_documents__document_id__patch",
+  deleteDocument: "delete_document_v1_documents__document_id__delete",
+  listQA: "list_qa_v1_kbs__kb_id__qa_pairs_get",
+  createQA: "create_qa_v1_kbs__kb_id__qa_pairs_post",
+  getQA: "get_qa_v1_qa_pairs__qa_id__get",
+  updateQA: "update_qa_v1_qa_pairs__qa_id__patch",
+  deleteQA: "delete_qa_v1_qa_pairs__qa_id__delete",
+  listSourceRoots: "list_roots_v1_source_roots_get",
+  scanSourceRoot: "scan_source_v1_source_roots__root_id__scan_post",
+  listSources: "list_sources_v1_kbs__kb_id__sources_get",
+  createSource: "create_source_v1_kbs__kb_id__sources_post",
+  getSource: "get_source_v1_sources__source_id__get",
+  updateSource: "update_source_v1_sources__source_id__patch",
+  deleteSource: "delete_source_v1_sources__source_id__delete",
+  syncSource: "sync_source_v1_sources__source_id__sync_post",
+  beginUpload: "begin_upload_v1_uploads_post",
+  putUploadFile: "upload_file_v1_uploads__batch_id__files_put",
+  completeUpload: "complete_upload_v1_uploads__batch_id__complete_post",
+  previewImport: "preview_import_v1_kbs__kb_id__imports_preview_post",
+  importDocuments: "import_documents_v1_kbs__kb_id__imports_post",
+  listVersions: "list_versions_v1_kbs__kb_id__versions_get",
+  getVersion: "get_version_v1_versions__version_id__get",
+  diffVersions: "diff_versions_v1_kbs__kb_id__version_diff_get",
+  publishVersion: "publish_version_v1_versions__version_id__publish_post",
+  rollbackVersion: "rollback_version_v1_kbs__kb_id__rollback_post",
+  getJob: "get_job_v1_jobs__job_id__get",
+  cancelJob: "cancel_job_v1_jobs__job_id__cancel_post",
+  jobEvents: "job_events_v1_jobs__job_id__events_get",
+  getKnowledgeCatalog: "list_retrievable_kbs_v1_knowledge_catalog_get",
+  previewSelection: "preview_selection_v1_knowledge_selection_preview_post",
+  getSessionSelection: "get_session_selection_v1_sessions__session_id__selection_get",
+  setSessionSelection: "update_session_selection_v1_sessions__session_id__selection_patch",
+  search: "search_v1_search_post",
+  ask: "ask_v1_ask_post",
+  createSession: "create_session_v1_sessions_post",
+  getHistory: "history_v1_sessions__session_id__history_get",
+  submitAnswer: "submit_answer_v1_sessions__session_id__answers_post",
+  getAnswer: "get_answer_v1_answers__answer_id__get",
+  cancelAnswer: "cancel_answer_v1_answers__answer_id__cancel_post",
+  getCitation: "get_citation_v1_answers__answer_id__citations__citation_id__get",
+  submitFeedback: "submit_feedback_v1_answers__answer_id__feedback_post",
+  listIssues: "list_issues_v1_issues_get",
+  getIssue: "get_issue_v1_issues__issue_id__get",
+  resolveIssue: "resolve_issue_v1_issues__issue_id__patch",
+  retestIssue: "retest_issue_v1_issues__issue_id__retest_post",
+  modelCapabilities: "model_capabilities_v1_models_capabilities_get",
+  discoverRuntimes: "discover_runtimes_v1_models_discovery_post",
+  listRuntimes: "list_runtimes_v1_models_runtimes_get",
+  listModels: "list_models_v1_models_get",
+  getModel: "get_model_v1_models__model_id__get",
+  listProfiles: "list_profiles_v1_inference_profiles_get",
+  createProfile: "create_profile_v1_inference_profiles_post",
+  getProfile: "get_profile_v1_inference_profiles__profile_id__get",
+  putProfile: "update_profile_v1_inference_profiles__profile_id__put",
+  disableProfile: "disable_profile_v1_inference_profiles__profile_id__disable_post",
+  getSessionInference: "get_session_inference_v1_sessions__session_id__inference_get",
+  setSessionInference: "update_session_inference_v1_sessions__session_id__inference_patch",
+  previewInstall: "preview_install_v1_model_installs_preview_post",
+  confirmInstall: "confirm_install_v1_model_installs_post",
+  verifyModel: "verify_model_v1_models__model_id__verifications_post",
+  subscribeAnswer: "answer_events_v1_answers__answer_id__events_get",
+  subscribeJob: "job_events_v1_jobs__job_id__events_get",
+};
+
 /** SSE entry points live in sse.ts and take the client as their first argument. */
 const STREAMS = {
   subscribeAnswer: (c) => subscribeAnswer(c, "a1", { onEvent() {}, reconnect: false }),
@@ -166,14 +244,17 @@ function operationOf(call) {
 
 const headerNames = (headers) => new Set(Object.keys(headers).map((name) => name.toLowerCase()));
 
-test("every SDK method sends its contract operation with the required parameters", async () => {
-  for (const [name, invoke] of Object.entries({ ...CALLS, ...STREAMS })) {
+test("every SDK method sends its expected contract operation with the required parameters", async () => {
+  const invocations = { ...CALLS, ...STREAMS };
+  assert.deepEqual(Object.keys(EXPECTED_OPERATIONS).sort(), Object.keys(invocations).sort());
+  for (const [name, invoke] of Object.entries(invocations)) {
     const { calls, client } = recorder();
     await invoke(client);
     assert.equal(calls.length, 1, `${name}: expected one request, got ${calls.length}`);
     const [call] = calls;
     const op = operationOf(call);
     assert.ok(op, `${name}: ${call.method} ${call.url.pathname} is not a contract operation`);
+    assert.equal(op.id, EXPECTED_OPERATIONS[name], `${name}: wrong contract operation`);
     for (const param of op.requiredQuery) {
       assert.ok(call.url.searchParams.has(param), `${name}: missing required query ${param}`);
     }

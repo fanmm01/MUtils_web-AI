@@ -5,7 +5,7 @@
  * only shows its answers.
  */
 
-import type { ImportPreview, KnowledgeBase, ManifestFile, Source, SourceManifest } from "@qa/client";
+import { QAError, type ImportPreview, type KnowledgeBase, type ManifestFile, type Selection as SourceSelection, type Source, type SourceManifest } from "@qa/client";
 import { dataTable, facts, idText, listOf, row } from "../components/data.js";
 import { watchJob } from "../components/jobs.js";
 import { kbContext, type KBContext } from "../components/kb-context.js";
@@ -32,7 +32,6 @@ export interface UploadSelection {
   files: Array<{ relativePath: string; size: number; selected: boolean; file: File }>;
 }
 
-const MAX_LISTED = 200;
 
 export function renderImportPage(ctx: PageContext): HTMLElement {
   const kbc = kbContext(ctx);
@@ -170,11 +169,11 @@ function kindLabel(source: Source): string {
 
 function sourceSections(ctx: PageContext, kb: KnowledgeBase, source: Source, addJob: AddJob): HTMLElement[] {
   const preview = previewPanel(ctx, kb, source, addJob);
-  const intake = source.kind === "upload" ? uploadPanel(ctx, source, preview.ready) : localRootPanel(ctx, source, addJob);
+  const intake = source.kind === "upload" ? uploadPanel(ctx, source, preview.uploaded) : localRootPanel(ctx, source, addJob);
   return [intake, preview.element];
 }
 
-function uploadPanel(ctx: PageContext, source: Source, onUploaded: () => void): HTMLElement {
+function uploadPanel(ctx: PageContext, source: Source, onUploaded: (manifest: SourceManifest) => void): HTMLElement {
   let selection: UploadSelection = { files: [] };
   const status = createStatusArea();
   const summary = h("p", { class: "note", role: "status" }, "尚未选择目录。");
@@ -186,14 +185,13 @@ function uploadPanel(ctx: PageContext, source: Source, onUploaded: () => void): 
   const renderSummary = (): void => {
     const total = selection.files.length;
     const chosen = selection.files.filter((file) => file.selected).length;
-    const hidden = total > MAX_LISTED ? `，列表只显示前 ${MAX_LISTED} 个` : "";
-    summary.textContent =
-      total === 0 ? "尚未选择目录。" : `已在浏览器中选择 ${total} 个文件，勾选 ${chosen} 个${hidden}。尚未上传。`;
+    summary.textContent = total === 0 ? "尚未选择目录。" : `已在浏览器中选择 ${total} 个文件，勾选 ${chosen} 个。尚未上传。`;
     upload.disabled = chosen === 0;
   };
   const renderFiles = (): void => {
     fileList.replaceChildren();
-    for (const file of selection.files.slice(0, MAX_LISTED)) {
+    // Every file is listed: a file that is selected must also be visible and uncheckable.
+    for (const file of selection.files) {
       const box = h("input", { type: "checkbox" });
       box.checked = file.selected;
       box.addEventListener("change", () => {
@@ -215,7 +213,8 @@ function uploadPanel(ctx: PageContext, source: Source, onUploaded: () => void): 
     picker.disabled = true;
     try {
       const manifest = await uploadSelection(ctx, source, selection, (text) => status.pending(text));
-      if (reportManifest(manifest, status)) onUploaded();
+      reportManifest(manifest, status);
+      onUploaded(manifest);
     } catch (error) {
       status.fail("上传", describeError(error));
     } finally {
@@ -343,24 +342,40 @@ export function syncSource(ctx: PageContext, sourceId: string) {
 
 type ImportMode = "merge" | "mirror";
 
-export function previewImport(ctx: PageContext, kb: KnowledgeBase, source: Source, mode: ImportMode) {
+export function previewImport(ctx: PageContext, kb: KnowledgeBase, source: Source, mode: ImportMode, selection: SourceSelection) {
   return ctx.client.previewImport(
     kb.kb_id,
-    { kb_id: kb.kb_id, source_id: source.source_id, mode, selection: {} },
+    { kb_id: kb.kb_id, source_id: source.source_id, mode, selection },
     { signal: ctx.signal },
   );
 }
 
-export function submitImport(ctx: PageContext, kb: KnowledgeBase, source: Source, preview: ImportPreview, mode: ImportMode) {
+export function submitImport(
+  ctx: PageContext,
+  kb: KnowledgeBase,
+  source: Source,
+  preview: ImportPreview,
+  mode: ImportMode,
+  selection: SourceSelection,
+) {
   return ctx.client.importDocuments(
     kb.kb_id,
-    { kb_id: kb.kb_id, source_id: source.source_id, mode, selection: {}, expected_preview_hash: preview.preview_hash },
+    { kb_id: kb.kb_id, source_id: source.source_id, mode, selection, expected_preview_hash: preview.preview_hash },
     { signal: ctx.signal },
   );
 }
 
-function previewPanel(ctx: PageContext, kb: KnowledgeBase, source: Source, addJob: AddJob): { element: HTMLElement; ready: () => void } {
+function previewPanel(
+  ctx: PageContext,
+  kb: KnowledgeBase,
+  source: Source,
+  addJob: AddJob,
+): { element: HTMLElement; uploaded: (manifest: SourceManifest) => void } {
   const status = createStatusArea();
+  // The server compares the request's selection with the batch's: send the one it was uploaded
+  // with. Before any upload on this page, a full scan (empty selection) is assumed.
+  let selection: SourceSelection = {};
+  let partial = false;
   const result = h("div", {});
   const modeSelect = h(
     "select",
@@ -378,14 +393,17 @@ function previewPanel(ctx: PageContext, kb: KnowledgeBase, source: Source, addJo
     if (!status.element.isConnected) return;
     const mode = modeSelect.value as ImportMode;
     result.replaceChildren();
-    const outcome = await attempt(status, "生成导入预览", () => previewImport(ctx, kb, source, mode));
+    const sent = selection;
+    const outcome = await attempt(status, "生成导入预览", () => previewImport(ctx, kb, source, mode, sent));
     if (!outcome.ok) {
       if (isConflict(outcome.error) && source.kind === "upload") {
         status.element.append(h("p", {}, "这个上传来源还没有完成的上传批次，请先上传目录。"));
+      } else if (isSelectionMismatch(outcome.error)) {
+        status.element.append(h("p", {}, "服务端记录的最近一次上传批次是按另一组勾选上传的（例如在刷新页面之前）。请重新选择目录并上传，再生成预览。"));
       }
       return;
     }
-    result.replaceChildren(previewView(ctx, kb, source, outcome.value, mode, run, addJob));
+    result.replaceChildren(previewView(ctx, kb, source, outcome.value, mode, sent, partial, run, addJob));
   };
   const element = section(
     "导入预览与确认",
@@ -395,12 +413,16 @@ function previewPanel(ctx: PageContext, kb: KnowledgeBase, source: Source, addJo
     result,
     note("预览只读取服务端已核验的文件清单，不改动知识库；确认时服务端会再次核对文件与预览摘要。"),
   );
-  const ready = (): void => {
+  const uploaded = (manifest: SourceManifest): void => {
+    // The server keeps the latest batch even when its check failed; follow it either way.
+    selection = manifest.selection ?? {};
+    partial = manifest.scan_scope === "partial";
     // A new upload makes any earlier preview stale.
     result.replaceChildren();
-    status.done("上传已核验，可以生成导入预览。");
+    if (manifest.scan_status === "succeeded") status.done("上传已核验，可以生成导入预览。");
+    else status.clear();
   };
-  return { element, ready };
+  return { element, uploaded };
 }
 
 function previewView(
@@ -409,6 +431,8 @@ function previewView(
   source: Source,
   preview: ImportPreview,
   mode: ImportMode,
+  selection: SourceSelection,
+  partial: boolean,
   regenerate: () => Promise<void>,
   addJob: AddJob,
 ): HTMLElement {
@@ -443,6 +467,7 @@ function previewView(
     group(mode === "mirror" ? "将从知识库删除的文件" : "来源中已不存在的文件（合并模式不删除）", removed, mode === "mirror" ? "danger" : "info"),
     group("冲突", conflicts, "danger"),
     unchanged && note("与该来源上次成功导入的清单相比没有变化。"),
+    mode === "mirror" && partial && note("这是部分上传：镜像模式只比较本次上传的文件，未勾选的文件不会因此被删除。"),
     conflicts.length > 0 && note("存在冲突时不能提交；请处理冲突后重新生成预览。"),
     needsDeletionConsent &&
       h("label", { class: "consent" }, deletionBox, ` 我已核对上面 ${removed.length} 个将被删除的文件，确认按来源删除它们`),
@@ -452,10 +477,10 @@ function previewView(
   confirm.addEventListener("click", () => {
     submitted = true;
     update();
-    void attempt(status, "确认导入", () => submitImport(ctx, kb, source, preview, mode)).then((outcome) => {
+    void attempt(status, "确认导入", () => submitImport(ctx, kb, source, preview, mode, selection)).then((outcome) => {
       if (!outcome.ok) {
         if (isConflict(outcome.error)) {
-          status.element.append(h("p", {}, "预览之后来源文件、导入模式或上次导入的基线发生了变化，这份预览已失效。请重新生成预览。"));
+          status.element.append(h("p", {}, "预览之后来源文件、勾选范围、导入模式或上次导入的基线发生了变化，这份预览已失效。请重新生成预览。"));
         } else if (isNotFound(outcome.error)) {
           status.element.append(h("p", {}, "服务端找不到这份预览，请重新生成预览。"));
         } else {
@@ -504,6 +529,11 @@ function jobsArea(ctx: PageContext, kbc: KBContext): { element: HTMLElement; add
   };
   return { element, add };
 }
+/** 422 from preview: the request's selection is not the one the latest batch was uploaded with. */
+function isSelectionMismatch(error: unknown): boolean {
+  return error instanceof QAError && error.status === 422 && error.details.some((item) => item.field === "selection");
+}
+
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} 字节`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;

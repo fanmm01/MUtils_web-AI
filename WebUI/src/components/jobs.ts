@@ -161,8 +161,7 @@ export function watchJob(client: Client, jobId: string, options: JobCardOptions)
     }
   };
 
-  const fetchOnce = async (): Promise<Job> => {
-    const job = await client.getJob(jobId, { signal: options.signal });
+  const fetchEvents = async (): Promise<void> => {
     const raw = await client.jobEvents(jobId, after, { signal: options.signal });
     for (const entry of raw.map(parseEvent)) {
       if (!entry || entry.seq <= after) continue;
@@ -170,26 +169,33 @@ export function watchJob(client: Client, jobId: string, options: JobCardOptions)
       after = entry.seq;
     }
     renderLog();
-    render(job);
-    return job;
   };
 
   const finished = (async (): Promise<Job | null> => {
     for (;;) {
       if (options.signal.aborted) return null;
+      let job: Job;
       try {
-        const job = await fetchOnce();
-        status.clear();
-        if (isTerminal(job)) {
-          options.onTerminal?.(job);
-          return job;
-        }
-        await sleep(options.pollMs, options.signal);
+        job = await client.getJob(jobId, { signal: options.signal });
       } catch (error) {
         if (options.signal.aborted) return null;
         status.fail("获取任务状态", describeError(error));
         if (!(await waitForRetry(status, options.signal))) return null;
+        continue;
       }
+      render(job);
+      try {
+        await fetchEvents();
+        status.clear();
+      } catch (error) {
+        if (options.signal.aborted) return null;
+        status.fail("获取任务事件", describeError(error));
+      }
+      if (isTerminal(job)) {
+        options.onTerminal?.(job);
+        return job;
+      }
+      await sleep(options.pollMs, options.signal);
     }
   })();
 

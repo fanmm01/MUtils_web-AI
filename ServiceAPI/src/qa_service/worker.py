@@ -79,7 +79,12 @@ async def run_once(container: Container, *, worker_id: str | None = None) -> str
 
     async def cancelled() -> bool:
         current = await jobs.get(job.job_id)
-        return current.state != JobState.RUNNING
+        return (
+            current.state != JobState.RUNNING
+            or current.worker_id != assigned_worker
+            or current.lease_until is None
+            or current.lease_until <= datetime.now(UTC)
+        )
 
     try:
         return await _execute_claimed_job(bundle, jobs, job, cancelled)
@@ -104,14 +109,16 @@ async def _execute_claimed_job(bundle, jobs, job, cancelled) -> str:
         outcome = await bundle.imports.execute(  # type: ignore[arg-type]
             job, files=files, should_cancel=cancelled
         )
-    except Conflict:
-        # The cancel API changed the row while this build ran; read the truth.
-        current = await jobs.get(job.job_id)
-        if current.state == JobState.CANCEL_REQUESTED:
-            await _confirm_cancel(jobs, current)
-            return current.job_id
-        raise
     except APIError as error:
+        current = await jobs.get(job.job_id)
+        if current.worker_id != job.worker_id or current.state not in (
+            JobState.RUNNING, JobState.CANCEL_REQUESTED
+        ):
+            # A recovered/reclaimed job belongs to another worker. Never let
+            # this stale execution write its terminal state or event.
+            return job.job_id
+        if current.state == JobState.CANCEL_REQUESTED:
+            return await _confirm_cancel(jobs, job)
         return await _finish(
             jobs, job, JobState.FAILED,
             error_code=error.code.value,
@@ -119,7 +126,7 @@ async def _execute_claimed_job(bundle, jobs, job, cancelled) -> str:
             diagnostic=error.message,
         )
     if outcome.cancelled:
-        return await _confirm_cancel(jobs, await jobs.get(job.job_id))
+        return await _confirm_cancel(jobs, job)
     if outcome.failed:
         return await _finish(
             jobs, job, JobState.FAILED,
@@ -168,11 +175,12 @@ async def _finish(
                 progress=fields.get("progress"),  # type: ignore[arg-type]
                 diagnostic=diagnostic,
             ),
+            worker_id=job.worker_id,
         )
     except StateConflict:
         current = await jobs.get(job.job_id)
-        if current.state == JobState.CANCEL_REQUESTED:
-            return await _confirm_cancel(jobs, current)
+        if current.state == JobState.CANCEL_REQUESTED and current.worker_id == job.worker_id:
+            return await _confirm_cancel(jobs, job)
         raise
     return result.job_id
 
@@ -180,17 +188,21 @@ async def _finish(
 async def _confirm_cancel(jobs: object, job: object) -> str:
     from qa_contracts.operations import JobEvent
 
+    current = await jobs.get(job.job_id)
+    if current.state != JobState.CANCEL_REQUESTED:
+        raise Conflict("cancel requested", f"state {current.state.value}")
     confirmed = await jobs.update_with_event(
-        job.model_copy(
+        current.model_copy(
             update={"state": JobState.CANCELLED, "worker_id": None, "lease_until": None}
         ),
-        job.revision,
+        current.revision,
         JobEvent(
             job_id=job.job_id,
             seq=1,
             event="job.cancelled",
             diagnostic="worker stopped at a safe point; no snapshot was activated",
         ),
+        worker_id=job.worker_id,
     )
     return confirmed.job_id
 

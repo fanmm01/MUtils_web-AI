@@ -68,9 +68,10 @@ export interface FakeState {
   batches: Map<string, Batch>;
   /** Latest completed upload manifest per source (what the server rescans). */
   uploads: Map<string, SourceManifest>;
-  /** Manifest of the last successful import per source (the diff baseline). */
+  /** Working source baselines; a published version pins its own immutable copy. */
   baselines: Map<string, SourceManifest>;
-  previews: Map<string, { preview: ImportPreview; manifest: SourceManifest; mode: string; sourceId: string }>;
+  versionBaselines: Map<string, Map<string, SourceManifest>>;
+  previews: Map<string, { preview: ImportPreview; manifest: SourceManifest; mode: string; sourceId: string; baseline: string }>;
   jobs: Map<string, { job: Job; payload: Body; events: Array<{ id: number; event: string; data: Body }> }>;
   versions: Map<string, Snapshot>;
   documents: Map<string, StoredDocument>;
@@ -137,6 +138,7 @@ export function createFakeApi(): FakeApi {
     batches: new Map(),
     uploads: new Map(),
     baselines: new Map(),
+    versionBaselines: new Map(),
     previews: new Map(),
     jobs: new Map(),
     versions: new Map(),
@@ -187,9 +189,33 @@ export function createFakeApi(): FakeApi {
     };
   };
 
+  const activeBaseline = (sourceId: string): SourceManifest | null => {
+    const source = state.sources.get(sourceId);
+    const active = source ? state.kbs.get(source.kb_id)?.active_version_id : null;
+    return active
+      ? state.versionBaselines.get(active)?.get(sourceId) ?? null
+      : state.baselines.get(sourceId) ?? null;
+  };
+  const baselineIdentity = (manifest: SourceManifest | null): string =>
+    JSON.stringify((manifest?.files ?? []).map((file) => [file.relative_path, file.digest, file.size]).sort());
+  const pinBaselines = (versionId: string, sourceId?: string, manifest?: SourceManifest): void => {
+    const pinned = new Map<string, SourceManifest>();
+    const version = state.versions.get(versionId);
+    if (!version) return;
+    const baseId = state.kbs.get(version.kb_id)?.active_version_id;
+    const inherited = baseId ? state.versionBaselines.get(baseId) : null;
+    for (const source of state.sources.values()) {
+      if (source.kb_id !== version.kb_id) continue;
+      const current = source.source_id === sourceId
+        ? manifest
+        : inherited?.get(source.source_id) ?? (!baseId ? state.baselines.get(source.source_id) : undefined);
+      if (current) pinned.set(source.source_id, current);
+    }
+    state.versionBaselines.set(versionId, pinned);
+  };
   /** Same rules as KBManagement ChangePlanner: only a complete mirror scan removes. */
   const diff = (sourceId: string, manifest: SourceManifest, mode: string) => {
-    const before = new Map((state.baselines.get(sourceId)?.files ?? []).map((file) => [file.relative_path, file.digest]));
+    const before = new Map((activeBaseline(sourceId)?.files ?? []).map((file) => [file.relative_path, file.digest]));
     const now = new Map((manifest.files ?? []).map((file) => [file.relative_path, file.digest]));
     const added = [...now.keys()].filter((path) => !before.has(path)).sort();
     const modified = [...now.keys()].filter((path) => before.has(path) && before.get(path) !== now.get(path)).sort();
@@ -211,6 +237,12 @@ export function createFakeApi(): FakeApi {
 
   const sameFiles = (a: SourceManifest, b: SourceManifest): boolean =>
     fingerprint("", a, "") === fingerprint("", b, "");
+
+  /** Pydantic `Selection` equality: missing lists are empty; order matters. */
+  const sameSelection = (a: Body, b: Body): boolean => {
+    const norm = (s: Body) => [s?.include_globs ?? [], s?.exclude_globs ?? [], s?.relative_paths ?? []];
+    return JSON.stringify(norm(a)) === JSON.stringify(norm(b));
+  };
 
   const enqueue = (payload: Body, key: string | null): Job => {
     const existing = key ? [...state.jobs.values()].find((entry) => entry.job.idempotency_key === key) : undefined;
@@ -280,13 +312,18 @@ export function createFakeApi(): FakeApi {
   };
 
   const execute = (jobId: string, payload: Body): void => {
+    const entry = state.jobs.get(jobId);
+    if (!entry) return;
+    const manifest = payload.manifest as SourceManifest;
+    if (baselineIdentity(activeBaseline(payload.source_id)) !== payload.baseline) {
+      finish(jobId, { state: "failed", error_code: "CONFLICT" }, "job.failed", { diagnostic: "the baseline changed" });
+      return;
+    }
     finish(jobId, { state: "running" }, "job.progress", { progress: 0 });
     const kb = state.kbs.get(payload.kb_id);
-    const manifest = payload.manifest as SourceManifest;
     const change = diff(payload.source_id, manifest, payload.mode);
     const base = kb?.active_version_id ?? null;
     if (base && change.added.length + change.modified.length + change.removed.length === 0) {
-      state.baselines.set(payload.source_id, manifest);
       finish(jobId, { state: "succeeded", progress: 1, result_version_id: base }, "job.completed", { progress: 1 });
       return;
     }
@@ -304,23 +341,29 @@ export function createFakeApi(): FakeApi {
       if (item.sourceId === payload.source_id && item.path !== null && replaced.has(item.path)) continue;
       revisions[item.doc.document_id] = item.doc.latest_revision_id;
     }
+    const pending: Array<{ path: string; text: string; existing: StoredDocument | undefined }> = [];
     for (const path of [...change.added, ...change.modified]) {
       const text = texts.get(`${payload.source_id}/${path}`) ?? `${path} 的内容`;
       if (text.includes(state.corruptMarker)) {
         diagnostics.push({ relative_path: path, status: "failed", message: "PARSE_FAILED: file is corrupt" });
         continue;
       }
-      const existing = byPath(payload.source_id, path);
+      pending.push({ path, text, existing: byPath(payload.source_id, path) });
+    }
+    if (diagnostics.some((diagnostic) => diagnostic.status === "failed")) {
+      finish(jobId, { state: "failed", error_code: "IMPORT_FAILED", diagnostics }, "job.failed", { diagnostic: "one or more source files failed to index" });
+      return;
+    }
+    for (const { path, text, existing } of pending) {
       const title = path.split("/").pop() ?? path;
       const stored = addRevision(payload.kb_id, existing?.doc.document_id ?? null, title, text, "document", payload.source_id, path);
-      // Like the real build, only failed or skipped files get a diagnostic.
       revisions[stored.doc.document_id] = stored.doc.latest_revision_id;
     }
     for (const path of change.removed) {
       const doc = byPath(payload.source_id, path);
       if (doc) doc.doc = { ...doc.doc, deleted: true };
     }
-    if (Object.keys(revisions).length === 0) {
+    if (Object.keys(revisions).length === 0 && !base) {
       finish(jobId, { state: "failed", error_code: "IMPORT_FAILED", diagnostics }, "job.failed", { diagnostic: "no indexable content in the selected scope" });
       return;
     }
@@ -329,7 +372,17 @@ export function createFakeApi(): FakeApi {
       document_revisions: revisions, keyword_profile: "zh-bm25-v1", keyword_index_ref: "idx", vector_index: "absent", created_at: clock(),
     };
     state.versions.set(version.version_id, version);
-    state.baselines.set(payload.source_id, manifest);
+    const previous = activeBaseline(payload.source_id);
+    const merged = new Map((previous?.files ?? []).map((file) => [file.relative_path, file]));
+    if (payload.mode === "mirror" && manifest.complete) merged.clear();
+    for (const file of manifest.files ?? []) merged.set(file.relative_path, file);
+    const baseline: SourceManifest = {
+      ...manifest,
+      selection: {},
+      files: [...merged.values()],
+    };
+    state.baselines.set(payload.source_id, baseline);
+    pinBaselines(version.version_id, payload.source_id, baseline);
     finish(jobId, { state: "succeeded", progress: 1, result_version_id: version.version_id, diagnostics }, "job.completed", { progress: 1 });
   };
   const routes: Array<[string, RegExp, Handler]> = [
@@ -451,18 +504,25 @@ export function createFakeApi(): FakeApi {
       if (source.kb_id !== kb.kb_id) return invalid("source_id", "does not belong to the requested knowledge base");
       const manifest = scan(source);
       if (isReply(manifest)) return manifest;
+      // Like ImportService.preview: the request must name the selection the batch was uploaded with.
+      if (!sameSelection(manifest.selection, body.selection)) return invalid("selection", "does not match the source manifest");
       const mode = body.mode ?? "merge";
       const change = diff(source.source_id, manifest, mode);
+      const baseline = baselineIdentity(activeBaseline(source.source_id));
       const preview: ImportPreview = {
         preview_id: nextId("prev"), kb_id: kb.kb_id, preview_hash: previewHash(kb.kb_id, manifest, mode),
         added: change.added, modified: change.modified, removed: change.removed, conflicts: [], created_at: clock(),
       };
-      state.previews.set(`${kb.kb_id}/${source.source_id}/${preview.preview_hash}`, { preview, manifest, mode, sourceId: source.source_id });
+      state.previews.set(preview.preview_id, { preview, manifest, mode, sourceId: source.source_id, baseline });
       return { status: 202, body: preview };
     }],
     ["POST", /^\/v1\/kbs\/([^/]+)\/imports$/, ([id], _q, body) => {
       if (body?.kb_id !== id) return invalid("kb_id", "must match the URL");
-      const recorded = state.previews.get(`${id}/${body.source_id}/${body.expected_preview_hash}`);
+      const recorded = [...state.previews.values()]
+        .reverse()
+        .find((entry) => entry.preview.kb_id === id
+          && entry.sourceId === body.source_id
+          && entry.preview.preview_hash === body.expected_preview_hash);
       if (!recorded) return notFound("import preview");
       const mode = body.mode ?? "merge";
       if (recorded.mode !== mode) return conflict(`preview mode ${recorded.mode}`, `request mode ${mode}`);
@@ -470,10 +530,16 @@ export function createFakeApi(): FakeApi {
       if (!source) return notFound("source");
       const manifest = scan(source);
       if (isReply(manifest)) return manifest;
+      if (!sameSelection(manifest.selection, recorded.manifest.selection) || !sameSelection(manifest.selection, body.selection)) {
+        return conflict("the previewed selection", "a different source selection was submitted");
+      }
       if (!sameFiles(recorded.manifest, manifest)) return conflict("the previewed file set", "a different file set was submitted");
       if (manifest.scan_status !== "succeeded") return invalid("manifest", "source scan did not succeed");
-      const payload = { kind: "import", kb_id: id, source_id: source.source_id, mode, manifest };
-      const job = enqueue(payload, body.expected_preview_hash);
+      if (baselineIdentity(activeBaseline(source.source_id)) !== recorded.baseline) {
+        return conflict("the previewed source baseline", "another import changed the baseline");
+      }
+      const payload = { kind: "import", kb_id: id, source_id: source.source_id, mode, manifest, baseline: recorded.baseline };
+      const job = enqueue(payload, `${recorded.preview.preview_id}:${recorded.baseline}`);
       return { status: 202, body: receipt(id as string, null, job.job_id) };
     }],
     ["POST", /^\/v1\/sources\/([^/]+)\/sync$/, ([id]) => {
@@ -482,7 +548,10 @@ export function createFakeApi(): FakeApi {
       const manifest = scan(source);
       if (isReply(manifest)) return manifest;
       if (manifest.scan_status !== "succeeded") return conflict("a successful scan", "the source scan failed");
-      const job = enqueue({ kind: "import", kb_id: source.kb_id, source_id: source.source_id, mode: "merge", manifest }, null);
+      const job = enqueue({
+        kind: "import", kb_id: source.kb_id, source_id: source.source_id,
+        mode: "merge", manifest, baseline: baselineIdentity(activeBaseline(source.source_id)),
+      }, null);
       return { status: 202, body: receipt(source.kb_id, null, job.job_id) };
     }],
     ["GET", /^\/v1\/jobs\/([^/]+)$/, ([id]) => {
@@ -612,7 +681,15 @@ export function createFakeApi(): FakeApi {
     if ((kb.active_version_id ?? null) !== expected) {
       return conflict(`active version ${expected ?? "none"}`, `active version ${kb.active_version_id ?? "none"}`);
     }
+    const pinned = state.versionBaselines.get(versionId);
+    if (!pinned) pinBaselines(versionId);
     touchKB(kb, { active_version_id: version.version_id });
+    for (const source of state.sources.values()) {
+      if (source.kb_id !== kb.kb_id) continue;
+      const baseline = state.versionBaselines.get(versionId)?.get(source.source_id);
+      if (baseline) state.baselines.set(source.source_id, baseline);
+      else state.baselines.delete(source.source_id);
+    }
     const published: Snapshot = { ...version, state: "published" };
     state.versions.set(versionId, published);
     return { status: 200, body: published };

@@ -123,6 +123,39 @@ async def test_chinese_and_identifier_bm25_reads_pinned_snapshot(tmp_path) -> No
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("persisted", [False, True])
+async def test_empty_index_is_pinned_to_kb_version_and_profile(tmp_path, persisted) -> None:
+    root = tmp_path / "indexes" if persisted else None
+    writer = BM25Index(root)
+    with pytest.raises(ValueError, match="empty keyword index"):
+        await writer.build([], "zh-v1")
+    with pytest.raises(ValueError, match="requires a KB, version and profile"):
+        await writer.build_empty("", "v1", "zh-v1")
+    with pytest.raises(ValueError, match="requires a KB, version and profile"):
+        await writer.build_empty("kb-a", "", "zh-v1")
+    with pytest.raises(ValueError, match="requires a KB, version and profile"):
+        await writer.build_empty("kb-a", "v1", "")
+    if persisted:
+        assert not root.exists()
+
+    ref = await writer.build_empty("kb-a", "v1", "zh-v1")
+    assert ref == await writer.build_empty("kb-a", "v1", "zh-v1")
+    reader = BM25Index(root) if persisted else writer
+    scope = SearchScope(kb_id="kb-a", version_id="v1", keyword_profile="zh-v1", index_ref=ref)
+    assert await reader.search("anything", scope, k=3) == []
+    for altered in (
+        scope.model_copy(update={"kb_id": "kb-b"}),
+        scope.model_copy(update={"version_id": "v2"}),
+        scope.model_copy(update={"keyword_profile": "zh-v2"}),
+    ):
+        with pytest.raises(ValueError, match="pinned search scope"):
+            await reader.search("anything", altered, k=3)
+    assert ref != await writer.build_empty("kb-b", "v1", "zh-v1")
+    assert ref != await writer.build_empty("kb-a", "v2", "zh-v1")
+    assert ref != await writer.build_empty("kb-a", "v1", "zh-v2")
+
+
+@pytest.mark.asyncio
 async def test_catalog_filters_published_and_authorized_and_reads_live_metadata() -> None:
     items = [
         KnowledgeBase(kb_id="kb-a", name="产品", active_version_id="v1", etag="e"),

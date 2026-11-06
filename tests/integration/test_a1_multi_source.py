@@ -16,6 +16,8 @@ import pytest
 from kb_management.indexing import ChangePlanner
 from qa_contracts.errors import Conflict, NotFound, ValidationFailed
 from qa_contracts.knowledge import (
+    ImportPreviewRequest,
+    ImportRequest,
     ManifestFile,
     Source,
     SourceManifest,
@@ -494,15 +496,42 @@ async def test_editing_an_imported_document_keeps_its_source_identity(
         assert edited.revision.relative_path == "a.md"
 
         _write(root, "a.md", "# 标题\n\n源文件被再次修改。\n")
-        second = await _import(bundle, "src_a", ["a.md"])
-        assert not second.failed, second.reason
-        assert document_id in second.snapshot.document_revisions, (
-            "the imported file must update the existing document, not create another"
+        new_manifest = _manifest("src_a", root, ["a.md"])
+        from qa_contracts.knowledge import ImportPreviewRequest, ImportRequest
+
+        preview = await bundle["imports"].preview(
+            ImportPreviewRequest(kb_id=bundle["kb"].kb_id, source_id="src_a"),
+            new_manifest,
         )
+        assert preview.modified == ["a.md"]
+        assert preview.conflicts == ["a.md"]
+        with pytest.raises(Conflict, match="manual edits"):
+            await bundle["imports"].apply(
+                ImportRequest(
+                    kb_id=bundle["kb"].kb_id,
+                    source_id="src_a",
+                    expected_preview_hash=preview.preview_hash,
+                ),
+                new_manifest,
+            )
+        # Direct calls to the worker must enforce the same rule, including a
+        # queued job accepted before the manual edit happened.
+        from kb_management.indexing import BuildRequest
+
+        with pytest.raises(Conflict, match="manual edits"):
+            await bundle["builder"].build(
+                BuildRequest(
+                    kb_id=bundle["kb"].kb_id,
+                    source_id="src_a",
+                    manifest=new_manifest,
+                    files={"a.md": root / "a.md"},
+                )
+            )
         documents = await bundle["content"].list(bundle["kb"].kb_id, 50)
         assert [item.document_id for item in documents.items] == [document_id]
         latest = await bundle["content"].latest_revision(document_id)
-        assert "源文件被再次修改" in latest.normalized_text
+        assert latest.revision_id == edited.revision.revision_id
+        assert latest.normalized_text == "手工润色后的正文。"
     finally:
         await bundle["store"].close()
 
@@ -543,6 +572,676 @@ async def test_stale_preview_after_another_import_conflicts(tmp_path: Path) -> N
                 ),
                 _manifest("src_a", root, ["a.md"]),
             )
+    finally:
+        await bundle["store"].close()
+
+
+async def test_queued_import_rejects_manual_edit_before_worker_commit(
+    tmp_path: Path,
+) -> None:
+    from kb_management.content import ContentService
+    from qa_contracts.knowledge import PutDocument
+
+    root = tmp_path / "corpus"
+    root.mkdir()
+    _write(root, "a.md", "first source version\n")
+    bundle = await _wired(tmp_path, root)
+    try:
+        first = await _import(bundle, "src_a", ["a.md"])
+        document_id = next(iter(first.snapshot.document_revisions))
+        _write(root, "a.md", "second source version\n")
+        manifest = _manifest("src_a", root, ["a.md"])
+        preview = await bundle["imports"].preview(
+            ImportPreviewRequest(kb_id=bundle["kb"].kb_id, source_id="src_a"),
+            manifest,
+        )
+        assert preview.modified == ["a.md"] and preview.conflicts == []
+        job = await bundle["imports"].apply(
+            ImportRequest(
+                kb_id=bundle["kb"].kb_id,
+                source_id="src_a",
+                expected_preview_hash=preview.preview_hash,
+            ),
+            manifest,
+        )
+        old_revision = (await bundle["content"].get(document_id)).revision.revision_id
+        await ContentService(
+            content=bundle["content"], qa_pairs=bundle["qa"], store=bundle["store"]
+        ).put(
+            PutDocument(
+                kb_id=bundle["kb"].kb_id,
+                title="edited",
+                text="my manual edit",
+                expected_revision_id=old_revision,
+            ),
+            document_id=document_id,
+        )
+        snapshots_before = await bundle["snapshots"].list(bundle["kb"].kb_id)
+        with pytest.raises(Conflict, match="manual edits"):
+            await bundle["imports"].execute(
+                job,
+                files={"a.md": root / "a.md"},
+            )
+        assert await bundle["snapshots"].list(bundle["kb"].kb_id) == snapshots_before
+        assert (await bundle["content"].get(document_id)).revision.normalized_text == (
+            "my manual edit"
+        )
+        baseline = await bundle["source_repo"].get_current_manifest("src_a")
+        assert baseline.files[0].digest != manifest.files[0].digest
+    finally:
+        await bundle["store"].close()
+
+
+async def test_manual_edit_conflicts_even_if_source_bytes_are_unchanged(
+    tmp_path: Path,
+) -> None:
+    from kb_management.content import ContentService
+    from qa_contracts.knowledge import PutDocument
+
+    root = tmp_path / "corpus"
+    root.mkdir()
+    _write(root, "a.md", "unchanged source\n")
+    bundle = await _wired(tmp_path, root)
+    try:
+        first = await _import(bundle, "src_a", ["a.md"])
+        document_id = next(iter(first.snapshot.document_revisions))
+        original = (await bundle["content"].get(document_id)).revision.revision_id
+        await ContentService(
+            content=bundle["content"], qa_pairs=bundle["qa"], store=bundle["store"]
+        ).put(
+            PutDocument(
+                kb_id=bundle["kb"].kb_id,
+                title="edited", text="manual change",
+                expected_revision_id=original,
+            ),
+            document_id=document_id,
+        )
+        manifest = _manifest("src_a", root, ["a.md"])
+        preview = await bundle["imports"].preview(
+            ImportPreviewRequest(kb_id=bundle["kb"].kb_id, source_id="src_a"), manifest
+        )
+        assert preview.modified == [] and preview.conflicts == ["a.md"]
+        with pytest.raises(Conflict, match="manual edits"):
+            await bundle["imports"].apply(
+                ImportRequest(
+                    kb_id=bundle["kb"].kb_id,
+                    source_id="src_a",
+                    expected_preview_hash=preview.preview_hash,
+                ),
+                manifest,
+            )
+    finally:
+        await bundle["store"].close()
+
+
+async def test_edit_after_preview_rejected_during_apply(tmp_path: Path) -> None:
+    from kb_management.content import ContentService
+    from qa_contracts.knowledge import ImportPreviewRequest, ImportRequest, PutDocument
+
+    root = tmp_path / "corpus"
+    root.mkdir()
+    _write(root, "a.md", "source text\n")
+    bundle = await _wired(tmp_path, root)
+    try:
+        initial = await _import(bundle, "src_a", ["a.md"])
+        document_id = next(iter(initial.snapshot.document_revisions))
+        _write(root, "a.md", "new source text\n")
+        manifest = _manifest("src_a", root, ["a.md"])
+        preview = await bundle["imports"].preview(
+            ImportPreviewRequest(kb_id=bundle["kb"].kb_id, source_id="src_a"), manifest
+        )
+        assert preview.modified == ["a.md"]
+        assert preview.conflicts == []
+        previous = await bundle["content"].get(document_id)
+        service = ContentService(
+            content=bundle["content"], qa_pairs=bundle["qa"], store=bundle["store"]
+        )
+        await service.put(
+            PutDocument(
+                kb_id=bundle["kb"].kb_id,
+                title="manual edit",
+                text="manual content",
+                expected_revision_id=previous.revision.revision_id,
+            ),
+            document_id=document_id,
+        )
+        with pytest.raises(Conflict, match="manual edits"):
+            await bundle["imports"].apply(
+                ImportRequest(
+                    kb_id=bundle["kb"].kb_id,
+                    source_id="src_a",
+                    expected_preview_hash=preview.preview_hash,
+                ),
+                manifest,
+            )
+        latest = await bundle["content"].get(document_id)
+        assert latest.revision.normalized_text == "manual content"
+        assert (await bundle["content"].list(bundle["kb"].kb_id)).items[0].document_id == (
+            document_id
+        )
+    finally:
+        await bundle["store"].close()
+
+
+async def test_deleted_source_with_baseline_cannot_be_reused_across_kbs(
+    tmp_path: Path,
+) -> None:
+    from kb_management.service import KBService
+    from qa_contracts.knowledge import CreateKB
+
+    root = tmp_path / "corpus"
+    root.mkdir()
+    _write(root, "a.md", "source content\n")
+    bundle = await _wired(tmp_path, root)
+    try:
+        await _import(bundle, "src_a", ["a.md"])
+        with pytest.raises(Conflict, match="history"):
+            await bundle["sources"].remove("src_a")
+        other = await KBService(knowledge=bundle["knowledge"]).create(
+            CreateKB(name="other")
+        )
+        with pytest.raises(ValidationFailed, match="request validation failed"):
+            from kb_management.sources import SourceService
+
+            await SourceService(sources=bundle["source_repo"]).register(
+                Source(
+                    source_id="src_a", kb_id=other.kb_id, kind="upload",
+                    display_name="other", revision="r1",
+                )
+            )
+        assert (await bundle["sources"].get("src_a")).kb_id == bundle["kb"].kb_id
+        assert await bundle["source_repo"].has_baseline("src_a")
+    finally:
+        await bundle["store"].close()
+
+
+async def test_kb_with_deleted_document_history_cannot_be_deleted(
+    tmp_path: Path,
+) -> None:
+    from kb_management.content import ContentService
+    from kb_management.service import KBService
+    from qa_contracts.knowledge import CreateKB, PutDocument
+
+    root = tmp_path / "corpus"
+    root.mkdir()
+    bundle = await _wired(tmp_path, root)
+    try:
+        kb = await KBService(knowledge=bundle["knowledge"]).create(
+            CreateKB(name="history")
+        )
+        service = ContentService(
+            content=bundle["content"], qa_pairs=bundle["qa"], store=bundle["store"]
+        )
+        receipt = await service.put(PutDocument(kb_id=kb.kb_id, title="t", text="body"))
+        latest = await bundle["content"].get(receipt.document_id)
+        await service.delete(receipt.document_id, latest.revision.revision_id)
+        assert (await bundle["content"].list(kb.kb_id)).items == []
+        with pytest.raises(Conflict, match="dependent content"):
+            await bundle["knowledge"].delete(kb.kb_id, None)
+        assert (await bundle["knowledge"].get(kb.kb_id)).kb_id == kb.kb_id
+    finally:
+        await bundle["store"].close()
+
+
+async def test_partial_import_preserves_full_baseline_for_next_mirror(
+    tmp_path: Path,
+) -> None:
+    from kb_management.indexing import BuildRequest, SnapshotPublisher
+    from qa_contracts.knowledge import Selection
+
+    root = tmp_path / "corpus"
+    root.mkdir()
+    _write(root, "a.md", "source A\n")
+    _write(root, "b.md", "source B\n")
+    bundle = await _wired(tmp_path, root)
+    try:
+        first = await _import(bundle, "src_a", ["a.md", "b.md"])
+        publisher = SnapshotPublisher(
+            knowledge=bundle["knowledge"],
+            snapshots=bundle["snapshots"],
+            files=bundle["files"],
+            sources=bundle["source_repo"],
+            store=bundle["store"],
+        )
+        await publisher.publish(first.snapshot.version_id, None)
+        _write(root, "a.md", "source A updated\n")
+        selected = _manifest("src_a", root, ["a.md"]).model_copy(
+            update={
+                "selection": Selection(relative_paths=["a.md"]),
+                "scan_scope": "partial",
+                "complete": False,
+            }
+        )
+        second = await bundle["builder"].build(
+            BuildRequest(
+                kb_id=bundle["kb"].kb_id,
+                source_id="src_a",
+                manifest=selected,
+                files={"a.md": root / "a.md"},
+            )
+        )
+        assert second.snapshot is not None, second.reason
+        previous = await bundle["source_repo"].get_manifest("src_a", "")
+        assert {entry.relative_path for entry in previous.files} == {"a.md", "b.md"}
+        await publisher.publish(second.snapshot.version_id, first.snapshot.version_id)
+        (root / "b.md").unlink()
+        full = _manifest("src_a", root, ["a.md"])
+        mirror = ChangePlanner.diff(previous, full, mode="mirror")
+        assert mirror.removed == ["b.md"]
+    finally:
+        await bundle["store"].close()
+
+
+async def test_rollback_then_sync_uses_rolled_back_baseline(tmp_path: Path) -> None:
+    from kb_management.indexing import SnapshotPublisher
+
+    root = tmp_path / "corpus"
+    root.mkdir()
+    _write(root, "a.md", "original source\n")
+    bundle = await _wired(tmp_path, root)
+    try:
+        publisher = SnapshotPublisher(
+            knowledge=bundle["knowledge"],
+            snapshots=bundle["snapshots"],
+            files=bundle["files"],
+            sources=bundle["source_repo"],
+            store=bundle["store"],
+        )
+        first = await _import(bundle, "src_a", ["a.md"])
+        await publisher.publish(first.snapshot.version_id, None)
+        _write(root, "a.md", "newer source\n")
+        second = await _import(bundle, "src_a", ["a.md"])
+        await publisher.publish(second.snapshot.version_id, first.snapshot.version_id)
+        await publisher.rollback(
+            bundle["kb"].kb_id, first.snapshot.version_id, second.snapshot.version_id
+        )
+        current = _manifest("src_a", root, ["a.md"])
+        preview = await bundle["imports"].preview(
+            ImportPreviewRequest(kb_id=bundle["kb"].kb_id, source_id="src_a"), current
+        )
+        assert preview.modified == ["a.md"]
+        assert preview.conflicts == []
+    finally:
+        await bundle["store"].close()
+
+
+async def test_source_with_preview_or_queued_job_cannot_be_deleted(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "corpus"
+    root.mkdir()
+    _write(root, "a.md", "source content\n")
+    bundle = await _wired(tmp_path, root)
+    try:
+        source = await bundle["source_repo"].put(
+            Source(
+                source_id="src_preview", kb_id=bundle["kb"].kb_id,
+                kind="local_root", root_id="root_a", display_name="p", revision="r1",
+            ),
+            None,
+        )
+        manifest = _manifest(source.source_id, root, ["a.md"])
+        preview = await bundle["imports"].preview(
+            ImportPreviewRequest(kb_id=bundle["kb"].kb_id, source_id=source.source_id),
+            manifest,
+        )
+        with pytest.raises(Conflict, match="history"):
+            await bundle["source_repo"].remove(source.source_id)
+        job = await bundle["imports"].apply(
+            ImportRequest(
+                kb_id=bundle["kb"].kb_id, source_id=source.source_id,
+                expected_preview_hash=preview.preview_hash,
+            ),
+            manifest,
+        )
+        assert job.job_id
+        with pytest.raises(Conflict, match="history"):
+            await bundle["source_repo"].remove(source.source_id)
+    finally:
+        await bundle["store"].close()
+
+
+async def test_two_confirmed_imports_out_of_order_reject_stale_active_baseline(
+    tmp_path: Path,
+) -> None:
+    from kb_management.indexing import SnapshotPublisher
+
+    root = tmp_path / "corpus"
+    root.mkdir()
+    _write(root, "a.md", "old source\n")
+    bundle = await _wired(tmp_path, root)
+    try:
+        publisher = SnapshotPublisher(
+            knowledge=bundle["knowledge"], snapshots=bundle["snapshots"],
+            files=bundle["files"], sources=bundle["source_repo"], store=bundle["store"],
+        )
+        first = await _import(bundle, "src_a", ["a.md"])
+        await publisher.publish(first.snapshot.version_id, None)
+        source = await bundle["sources"].get("src_a")
+        _write(root, "a.md", "second source\n")
+        second_manifest = _manifest("src_a", root, ["a.md"])
+        second_preview = await bundle["imports"].preview(
+            ImportPreviewRequest(kb_id=bundle["kb"].kb_id, source_id="src_a"),
+            second_manifest,
+        )
+        second_job = await bundle["imports"].apply(
+            ImportRequest(
+                kb_id=bundle["kb"].kb_id, source_id="src_a",
+                expected_preview_hash=second_preview.preview_hash,
+            ),
+            second_manifest,
+        )
+        _write(root, "a.md", "third source\n")
+        third_manifest = _manifest("src_a", root, ["a.md"])
+        third_preview = await bundle["imports"].preview(
+            ImportPreviewRequest(kb_id=bundle["kb"].kb_id, source_id="src_a"),
+            third_manifest,
+        )
+        third_job = await bundle["imports"].apply(
+            ImportRequest(
+                kb_id=bundle["kb"].kb_id, source_id="src_a",
+                expected_preview_hash=third_preview.preview_hash,
+            ),
+            third_manifest,
+        )
+        newer = await bundle["imports"].execute(
+            third_job, files=bundle["imports"].file_paths(source, third_manifest)
+        )
+        await publisher.publish(newer.snapshot.version_id, first.snapshot.version_id)
+        # Preserve the old job's confirmed bytes: this exercises baseline CAS
+        # independently of the queued-byte-drift test below.
+        _write(root, "a.md", "second source\n")
+        with pytest.raises(Conflict, match="baseline changed"):
+            await bundle["imports"].execute(
+                second_job, files=bundle["imports"].file_paths(source, second_manifest)
+            )
+        assert (await bundle["knowledge"].get(bundle["kb"].kb_id)).active_version_id == (
+            newer.snapshot.version_id
+        )
+        assert (await bundle["source_repo"].get_active_manifest("src_a")).files == (
+            third_manifest.files
+        )
+    finally:
+        await bundle["store"].close()
+
+
+async def test_queued_ready_import_rechecks_baseline_before_committing(
+    tmp_path: Path,
+) -> None:
+    from kb_management.indexing import SnapshotPublisher
+
+    root = tmp_path / "corpus"
+    root.mkdir()
+    _write(root, "a.md", "old source\n")
+    bundle = await _wired(tmp_path, root)
+    try:
+        publisher = SnapshotPublisher(
+            knowledge=bundle["knowledge"], snapshots=bundle["snapshots"],
+            files=bundle["files"], sources=bundle["source_repo"],
+            store=bundle["store"],
+        )
+        first = await _import(bundle, "src_a", ["a.md"])
+        old_digest = _manifest("src_a", root, ["a.md"]).files[0].digest
+        await publisher.publish(first.snapshot.version_id, None)
+        _write(root, "a.md", "new source\n")
+        pending = await _import(bundle, "src_a", ["a.md"])
+        assert pending.snapshot is not None
+        # The same active baseline still regards the new bytes as modified;
+        # constructing another READY snapshot must not reuse the old active one.
+        again = await _import(bundle, "src_a", ["a.md"])
+        assert again.snapshot is not None
+        assert again.snapshot.version_id != first.snapshot.version_id
+        assert (await bundle["source_repo"].get_active_manifest("src_a")).files[0].digest == (
+            old_digest
+        )
+    finally:
+        await bundle["store"].close()
+
+
+async def test_failed_changed_file_does_not_disappear_when_another_file_changes(
+    tmp_path: Path,
+) -> None:
+    from kb_management.indexing import SnapshotPublisher
+
+    root = tmp_path / "corpus"
+    root.mkdir()
+    _write(root, "a.md", "old A\n")
+    _write(root, "b.md", "old B\n")
+    bundle = await _wired(tmp_path, root)
+    try:
+        publisher = SnapshotPublisher(
+            knowledge=bundle["knowledge"], snapshots=bundle["snapshots"],
+            files=bundle["files"], sources=bundle["source_repo"], store=bundle["store"],
+        )
+        first = await _import(bundle, "src_a", ["a.md", "b.md"])
+        await publisher.publish(first.snapshot.version_id, None)
+        previous = await bundle["source_repo"].get_active_manifest("src_a")
+        old_docs = first.snapshot.document_revisions.copy()
+        _write(root, "a.md", "")  # changed, but not indexable
+        _write(root, "b.md", "new B\n")
+        failed = await _import(bundle, "src_a", ["a.md", "b.md"])
+        assert failed.failed and failed.snapshot is None
+        assert any(
+            diagnostic.relative_path == "a.md" and diagnostic.status == "failed"
+            for diagnostic in failed.diagnostics
+        )
+        assert (await bundle["knowledge"].get(bundle["kb"].kb_id)).active_version_id == (
+            first.snapshot.version_id
+        )
+        assert await bundle["source_repo"].get_active_manifest("src_a") == previous
+        assert await bundle["source_repo"].get_current_manifest("src_a") == previous
+        assert (await bundle["snapshots"].list(bundle["kb"].kb_id))[-1].document_revisions == (
+            old_docs
+        )
+        for document_id, revision_id in old_docs.items():
+            assert (await bundle["content"].get(document_id)).revision.revision_id == (
+                revision_id
+            )
+    finally:
+        await bundle["store"].close()
+
+
+async def test_queued_local_root_byte_change_fails_without_moving_baseline(
+    tmp_path: Path,
+) -> None:
+    from kb_management.indexing import SnapshotPublisher
+
+    root = tmp_path / "corpus"
+    root.mkdir()
+    _write(root, "a.md", "original bytes\n")
+    bundle = await _wired(tmp_path, root)
+    try:
+        publisher = SnapshotPublisher(
+            knowledge=bundle["knowledge"], snapshots=bundle["snapshots"],
+            files=bundle["files"], sources=bundle["source_repo"], store=bundle["store"],
+        )
+        first = await _import(bundle, "src_a", ["a.md"])
+        await publisher.publish(first.snapshot.version_id, None)
+        old_baseline = await bundle["source_repo"].get_active_manifest("src_a")
+        old_revisions = first.snapshot.document_revisions.copy()
+        _write(root, "a.md", "bytes accepted at confirmation\n")
+        manifest = _manifest("src_a", root, ["a.md"])
+        preview = await bundle["imports"].preview(
+            ImportPreviewRequest(kb_id=bundle["kb"].kb_id, source_id="src_a"), manifest
+        )
+        job = await bundle["imports"].apply(
+            ImportRequest(
+                kb_id=bundle["kb"].kb_id, source_id="src_a",
+                expected_preview_hash=preview.preview_hash,
+            ),
+            manifest,
+        )
+        # The queue waits while the source changes again, with the same path.
+        _write(root, "a.md", "bytes changed after confirmation\n")
+        with pytest.raises(Conflict, match="file changed after import confirmation"):
+            await bundle["imports"].execute(job, files={"a.md": root / "a.md"})
+        assert (await bundle["knowledge"].get(bundle["kb"].kb_id)).active_version_id == (
+            first.snapshot.version_id
+        )
+        assert (await bundle["source_repo"].get_active_manifest("src_a")) == old_baseline
+        assert (await bundle["snapshots"].list(bundle["kb"].kb_id))[-1].document_revisions == (
+            old_revisions
+        )
+        assert await bundle["source_repo"].get_current_manifest("src_a") == old_baseline
+    finally:
+        await bundle["store"].close()
+
+
+async def test_ready_import_does_not_make_active_source_look_unchanged(
+    tmp_path: Path,
+) -> None:
+    from kb_management.indexing import SnapshotPublisher
+
+    root = tmp_path / "corpus"
+    root.mkdir()
+    _write(root, "a.md", "old source\n")
+    bundle = await _wired(tmp_path, root)
+    try:
+        publisher = SnapshotPublisher(
+            knowledge=bundle["knowledge"], snapshots=bundle["snapshots"],
+            files=bundle["files"], sources=bundle["source_repo"],
+            store=bundle["store"],
+        )
+        first = await _import(bundle, "src_a", ["a.md"])
+        await publisher.publish(first.snapshot.version_id, None)
+        _write(root, "a.md", "new source\n")
+        pending = await _import(bundle, "src_a", ["a.md"])
+        assert pending.snapshot.version_id != first.snapshot.version_id
+        assert (await bundle["knowledge"].get(bundle["kb"].kb_id)).active_version_id == (
+            first.snapshot.version_id
+        )
+        preview = await bundle["imports"].preview(
+            ImportPreviewRequest(kb_id=bundle["kb"].kb_id, source_id="src_a"),
+            _manifest("src_a", root, ["a.md"]),
+        )
+        assert preview.modified == ["a.md"]
+    finally:
+        await bundle["store"].close()
+
+
+async def test_full_merge_omission_keeps_baseline_for_next_mirror(
+    tmp_path: Path,
+) -> None:
+    from kb_management.indexing import BuildRequest, SnapshotPublisher
+
+    root = tmp_path / "corpus"
+    root.mkdir()
+    _write(root, "a.md", "source A\n")
+    _write(root, "b.md", "source B\n")
+    bundle = await _wired(tmp_path, root)
+    try:
+        first = await _import(bundle, "src_a", ["a.md", "b.md"])
+        publisher = SnapshotPublisher(
+            knowledge=bundle["knowledge"], snapshots=bundle["snapshots"],
+            files=bundle["files"], sources=bundle["source_repo"],
+            store=bundle["store"],
+        )
+        await publisher.publish(first.snapshot.version_id, None)
+        (root / "b.md").unlink()
+        _write(root, "a.md", "source A updated\n")
+        merged = _manifest("src_a", root, ["a.md"])
+        outcome = await bundle["builder"].build(
+            BuildRequest(
+                kb_id=bundle["kb"].kb_id, source_id="src_a",
+                manifest=merged, files={"a.md": root / "a.md"}, mode="merge",
+            )
+        )
+        assert outcome.snapshot is not None, outcome.reason
+        retained = await bundle["source_repo"].get_current_manifest("src_a")
+        assert {entry.relative_path for entry in retained.files} == {"a.md", "b.md"}
+        assert ChangePlanner.diff(retained, merged, mode="mirror").removed == ["b.md"]
+    finally:
+        await bundle["store"].close()
+
+
+async def test_mirror_removal_of_last_source_file_creates_empty_snapshot(
+    tmp_path: Path,
+) -> None:
+    from kb_management.indexing import BuildRequest, SnapshotPublisher
+
+    root = tmp_path / "corpus"
+    root.mkdir()
+    _write(root, "a.md", "source document\n")
+    bundle = await _wired(tmp_path, root)
+    try:
+        first = await _import(bundle, "src_a", ["a.md"])
+        publisher = SnapshotPublisher(
+            knowledge=bundle["knowledge"], snapshots=bundle["snapshots"],
+            files=bundle["files"], sources=bundle["source_repo"],
+            store=bundle["store"],
+        )
+        await publisher.publish(first.snapshot.version_id, None)
+        (root / "a.md").unlink()
+        complete_empty = _manifest("src_a", root, [])
+        removed = await bundle["builder"].build(
+            BuildRequest(
+                kb_id=bundle["kb"].kb_id, source_id="src_a",
+                manifest=complete_empty, mode="mirror",
+            )
+        )
+        assert not removed.failed and removed.snapshot is not None, removed.reason
+        assert removed.snapshot.document_revisions == {}
+        assert await bundle["files"].load_all_chunks(
+            bundle["kb"].kb_id, removed.snapshot.version_id
+        ) == []
+        await publisher.publish(removed.snapshot.version_id, first.snapshot.version_id)
+        assert (await bundle["knowledge"].get(bundle["kb"].kb_id)).active_version_id == (
+            removed.snapshot.version_id
+        )
+        baseline = await bundle["source_repo"].get_active_manifest("src_a")
+        assert baseline.files == []
+        assert (await bundle["content"].list(bundle["kb"].kb_id)).items == []
+    finally:
+        await bundle["store"].close()
+
+
+async def test_blank_first_import_cannot_publish_an_empty_snapshot(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "corpus"
+    root.mkdir()
+    _write(root, "blank.md", "")
+    bundle = await _wired(tmp_path, root)
+    try:
+        outcome = await _import(bundle, "src_a", ["blank.md"])
+        assert outcome.failed is True
+        assert outcome.snapshot is None
+        assert (await bundle["snapshots"].list(bundle["kb"].kb_id)) == []
+        assert (await bundle["knowledge"].get(bundle["kb"].kb_id)).active_version_id is None
+    finally:
+        await bundle["store"].close()
+
+
+async def test_rollback_removes_baseline_for_source_absent_from_old_version(
+    tmp_path: Path,
+) -> None:
+    from kb_management.indexing import SnapshotPublisher
+
+    root = tmp_path / "corpus"
+    root.mkdir()
+    _write(root, "a.md", "source A\n")
+    _write(root, "b.md", "source B\n")
+    bundle = await _wired(tmp_path, root)
+    try:
+        publisher = SnapshotPublisher(
+            knowledge=bundle["knowledge"], snapshots=bundle["snapshots"],
+            files=bundle["files"], sources=bundle["source_repo"], store=bundle["store"],
+        )
+        first = await _import(bundle, "src_a", ["a.md"])
+        await publisher.publish(first.snapshot.version_id, None)
+        second = await _import(bundle, "src_b", ["b.md"])
+        await publisher.publish(second.snapshot.version_id, first.snapshot.version_id)
+        assert await bundle["source_repo"].has_baseline("src_b")
+        await publisher.rollback(
+            bundle["kb"].kb_id, first.snapshot.version_id, second.snapshot.version_id
+        )
+        assert not await bundle["source_repo"].has_baseline("src_b")
+        preview = await bundle["imports"].preview(
+            ImportPreviewRequest(kb_id=bundle["kb"].kb_id, source_id="src_b"),
+            _manifest("src_b", root, ["b.md"]),
+        )
+        assert preview.added == ["b.md"]
+        assert preview.conflicts == []
     finally:
         await bundle["store"].close()
 

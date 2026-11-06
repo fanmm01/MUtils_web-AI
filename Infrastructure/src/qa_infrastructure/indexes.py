@@ -73,6 +73,20 @@ class BM25Index:
             "profile": profile,
             "chunks": [chunk.model_dump(mode="json") for chunk in chunks],
         }
+        return self._store_payload(payload)
+
+    async def build_empty(self, kb_id: str, version_id: str, profile: str) -> str:
+        """Seal an empty index with explicit, immutable KB/version identity."""
+        if not all(
+            isinstance(value, str) and 1 <= len(value) <= 256
+            for value in (kb_id, version_id)
+        ) or not isinstance(profile, str) or not profile:
+            raise ValueError("empty keyword index requires a KB, version and profile")
+        return self._store_payload(
+            {"kb_id": kb_id, "version_id": version_id, "profile": profile, "chunks": []}
+        )
+
+    def _store_payload(self, payload: dict[str, object]) -> str:
         encoded = json.dumps(
             payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")
         ).encode("utf-8")

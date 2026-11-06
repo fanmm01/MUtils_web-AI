@@ -28,33 +28,33 @@ npm ci
 
 ## 3. 数据库初始化
 
-P1 **没有**数据库文件。`Infrastructure/src/qa_infrastructure/sqlite.py` 的 `SQLiteStore.open()` 是占位，构造和调用都不会创建文件或目录；`var/`、`data/` 被 `.gitignore` 忽略。
-
-P2 起由显式管理动作执行迁移，不在应用启动、包导入或测试收集时自动建库。迁移文件将放在 `Infrastructure/migrations/`，由 `qa-api` 之外的管理命令执行。
+P1 阶段没有数据库。P2 `SQLiteStore` 已实现：构造/导入不建库，`open()` 只接入已有数据库；显式管理命令 `uv run --all-packages python -m qa_service.migrate --target head` 才创建 `QA_DATA_DIR/qa.sqlite3` 并应用 `Infrastructure/migrations/`。应用启动和测试收集不自动迁移；`var/`、`data/` 是 `.gitignore` 忽略的运行目录。
 
 ## 4. 后台任务
 
-- `qa-worker` 入口已存在（`ServiceAPI/src/qa_service/worker.py`），P1 的 `run_worker` 直接拒绝运行：没有可消费的持久队列，就不假装消费。
-- P1 的 `dispatch()` 对每种 `JobKind` 抛 `NotImplementedError`。
-- P2 引入租约、心跳、恢复与幂等键；P3 增加模型安装任务的对账。
+- P2 `qa-worker` 处理持久化导入 Job：认领租约、构建 READY 快照、显式取消的协作检查与事件按 seq 回放；没有已迁移数据库时拒绝运行，不能把业务未就绪伪装为成功。
+- 模型安装/验证 Job 和上游对账仍属于 P3；P2 的 `GET /v1/jobs/{id}/events` 是可重放 JSON，不是 SSE。P3 Gate 将冻结取消未知结果、租约续期和 SSE 协商。
 
 ## 5. 解析与 OCR
 
-- `KBManagement/src/kb_management/parsers.py` 只声明支持的格式（`.doc/.docx/.xls/.xlsx/.md/.txt/.pdf`）与能力标记；不读取文件、不调用转换器。
-- OCR 适配器只报告“可能可用”，不执行识别。`scripts/check_environment.py` 仅检查 `soffice`、`tesseract` 是否在 PATH。
-- 加密、损坏、不支持或超限文件在 P2 起返回逐文件诊断；扫描 PDF 无 OCR 时不得当作空文本成功。
+- `KBManagement/src/kb_management/parsers.py` 已解析 `.md/.txt/.docx/.xls/.xlsx/.pdf` 并保留结构定位；旧 `.doc` 需要已安装的受控 LibreOffice 转换器，未配置时明确报告 `CONVERSION_UNAVAILABLE`，不能以能力声明代替实测。
+- OCR 执行尚未配置；无文本层的扫描 PDF 返回 `OCR_REQUIRED` / `OCR_UNAVAILABLE`，不返回空成功。`scripts/check_environment.py` 只报告 `soffice`、`tesseract` 等候选，不启动外部程序。
+- 损坏、加密、不支持或超限文件给逐文件诊断；哪些格式在当前机器真实跑通过，以 P2 复核报告和测试夹具为准。
 
 ## 6. 运行与验证
 
 ```bash
-uv run qa-api                     # 仅回环地址；非回环绑定会被拒绝
-uv run qa --help
+uv run --all-packages python -m qa_service.migrate --target head  # operational 模式先显式迁移
+uv run --all-packages qa-api                                      # 仅回环地址
+uv run --all-packages qa-worker                                   # 单独终端
+uv run --all-packages qa --help
 uv run --all-packages ruff check .
-uv run --all-packages pytest tests/scaffold tests/contracts -q
+uv run --all-packages pytest -q
+uv run --all-packages pytest tests/integration/cross_stream -q
 uv run --all-packages python scripts/export_contracts.py --check
-node node_modules/typescript/bin/tsc -p Clients/typescript/tsconfig.json --noEmit
-npm run test:scaffold -w @qa/client
-uv run python scripts/check_distribution.py --check
+uv run --all-packages python scripts/check_distribution.py --check
+npm run typecheck && npm run build && npm run test:scaffold
+npm run test:e2e  # 当前固定临时端口，同一时刻只跑一个实例
 ```
 
 `scripts/dev.py` 可启动 API 或 worker，并在退出时清理自己启动的进程；不会接管已有进程。
@@ -63,9 +63,9 @@ uv run python scripts/check_distribution.py --check
 
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
-| `QA_MODE` | `scaffold` | `scaffold` / `operational` |
-| `QA_HOST`、`QA_PORT` | `127.0.0.1`、`8000` | P1 仅回环 |
-| `QA_DATA_DIR` | `var` | 运行数据目录；启动不创建 |
+| `QA_MODE` | `scaffold` | `scaffold` / `operational`；只有后者开放 P2 管理业务 |
+| `QA_HOST`、`QA_PORT` | `127.0.0.1`、`8000` | 当前单用户回环部署，不代表多用户鉴权已实现 |
+| `QA_DATA_DIR` | `var` | 运行数据目录；**仅显式迁移**创建数据库 |
 | `QA_ALLOWED_ORIGINS` | 空 | 逗号分隔；为空时禁用 CORS |
 | `QA_RUNTIME_TARGETS` | 空 | JSON 数组，服务端 allow-list；只含 `target_id`/`kind`/`display_name` |
 | `QA_MAX_CANDIDATE_KBS` / `QA_MAX_SELECTED_KBS` / `QA_PROBE_TIMEOUT_MS` | 20 / 3 / 1500 | 选库限额 |
@@ -94,4 +94,4 @@ uv run python scripts/check_distribution.py --check
 7. 版本：导入任务成功后产生 `ready` 快照，`POST /v1/versions/{id}/publish`（或 `/v1/kbs/{id}/publish`）以 `expected_active_version_id` 比较交换；失败或冲突不切换活动版本；`rollback` 同样基于已校验的旧快照。
 8. 任务事件：`GET /v1/jobs/{id}/events` 目前返回持久化 JSON 事件（同样的 `seq` 可重放）；SSE 流式在 P3。
 
-尚未验收：`.doc` 转换需要本机 LibreOffice；扫描 PDF 的 OCR 尚未配置（分别返回 `CONVERSION_UNAVAILABLE` / `OCR_REQUIRED` / `OCR_UNAVAILABLE`，不会当空成功）。检索、选库、问答仍为 A2/P3。
+尚未验收：`.doc` 转换需要本机 LibreOffice；扫描 PDF 的 OCR 尚未配置（分别返回 `CONVERSION_UNAVAILABLE` / `OCR_REQUIRED` / `OCR_UNAVAILABLE`，不会当空成功）。A2 核心关键词检索和选库可在后端端口直接运行，但外部检索/选库/问答 HTTP 路由仍为 501，模型/向量/真实问答属于 P3。

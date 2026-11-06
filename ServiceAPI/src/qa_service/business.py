@@ -102,6 +102,8 @@ async def services(
         knowledge=container.knowledge,
         snapshots=container.snapshots,
         files=container.snapshot_files,
+        sources=container.sources,
+        store=container.store,
     )
     rebuilds = ContentRebuilder(builder=builder, snapshots=container.snapshots)
     return BusinessServices(
@@ -117,6 +119,7 @@ async def services(
             content=container.content,
             qa_pairs=container.qa_pairs,
             builds=rebuilds,
+            store=container.store,
         ),
         imports=ImportService(
             knowledge=container.knowledge,
@@ -124,6 +127,7 @@ async def services(
             previews=container.previews,
             jobs=container.jobs,
             builder=builder,
+            content=container.content,
             files=resolver,
             local_roots=container.settings.source_roots,
             upload_root=container.settings.data_dir / "uploads",

@@ -104,7 +104,7 @@ class KBService:
     async def _require_empty(self, kb: KnowledgeBase) -> None:
         if self._sources is not None and await self._sources.list(kb.kb_id):
             raise Conflict("a knowledge base without sources", "sources still exist")
-        if self._content is not None and await self._content.list(kb.kb_id, 1):
+        if self._content is not None:
             page = await self._content.list(kb.kb_id, 1)
             if page.items:
                 raise Conflict("a knowledge base without documents", "documents still exist")

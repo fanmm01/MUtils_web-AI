@@ -15,6 +15,8 @@ A failure at any step before publish leaves the active version untouched.
 
 from __future__ import annotations
 
+import hashlib
+import io
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
@@ -33,6 +35,7 @@ from qa_contracts.knowledge import (
     ParsedDocument,
     QAPair,
     Revision,
+    Selection,
     Snapshot,
     SnapshotState,
     SourceManifest,
@@ -55,6 +58,8 @@ class ChunkSplitterPort(Protocol):
 class KeywordIndexWriterPort(Protocol):
     async def build(self, chunks: list[Chunk], profile: str) -> str: ...
 
+    async def build_empty(self, kb_id: str, version_id: str, profile: str) -> str: ...
+
 
 class ParserPort(Protocol):
     async def parse(
@@ -71,6 +76,8 @@ class BuildRequest:
     #: Server-authorized local paths for the files in this manifest.
     files: Mapping[str, Path] = field(default_factory=dict)
     mode: str = "merge"
+    #: A queued import is valid only against its confirmed preview baseline.
+    expected_baseline_hash: str | None = None
     #: Cooperative cancellation; checked between files and before committing.
     should_cancel: Callable[[], Awaitable[bool]] | None = None
 
@@ -181,11 +188,15 @@ class IndexBuilder:
         """
         await self._knowledge.get(request.kb_id)
         base = await self._base_snapshot(request.kb_id)
-        previous = None
-        if request.source_id is not None and await self._sources.has_baseline(
-            request.source_id
-        ):
-            previous = await self._sources.get_manifest(request.source_id, base or "")
+        previous = (
+            await self._sources.get_active_manifest(request.source_id)
+            if request.source_id is not None else None
+        )
+        if request.expected_baseline_hash is not None:
+            from .imports import baseline_hash
+
+            if baseline_hash(previous) != request.expected_baseline_hash:
+                raise Conflict("the previewed source baseline", "baseline changed")
         change = (
             ChangePlanner.diff(previous, request.manifest, request.mode)
             if request.manifest is not None
@@ -201,14 +212,10 @@ class IndexBuilder:
 
         if from_source and base and not (
             change.added or change.modified or change.removed
-        ):
+        ) and not await self._source_has_manual_edits(request, change):
             base_snapshot = await self._snapshots.get(base)
-            await self._files.verify(base_snapshot.kb_id, base_snapshot.version_id)
-            await self._sources.save_manifest(
-                request.source_id,
-                base,
-                _baseline_for(request.manifest, base_snapshot.indexed_file_ids),
-            )
+            if not await self._files.verify(base_snapshot.kb_id, base_snapshot.version_id):
+                raise Conflict("verified active snapshot", "snapshot files are incomplete")
             outcome.reused_paths = list(change.unchanged)
             outcome.snapshot = base_snapshot
             return outcome
@@ -255,6 +262,14 @@ class IndexBuilder:
                     revision_id=revision.revision_id,
                     profile=self.chunk_profile,
                 )
+                if not new_chunks:
+                    outcome.diagnostics.append(
+                        JobFileDiagnostic(
+                            relative_path=path, status="failed",
+                            message="file produced no indexable content",
+                        )
+                    )
+                    continue
                 chunks.extend(new_chunks)
                 document_revisions[revision.document_id] = revision.revision_id
                 indexed_files.append(path)
@@ -282,10 +297,6 @@ class IndexBuilder:
                     )
                     continue
                 revision = await self._content.latest_revision(document.document_id)
-                document_revisions[document.document_id] = revision.revision_id
-                indexed_files.append(path)
-                outcome.reused_paths.append(path)
-                await self._files.write_revision(handle, revision)
                 reused = _rebased_chunks(
                     base_chunks.get(revision.revision_id), version_id
                 )
@@ -301,6 +312,18 @@ class IndexBuilder:
                         profile=self.chunk_profile,
                     )
                     outcome.parsed_paths.append(path)
+                if not reused:
+                    outcome.diagnostics.append(
+                        JobFileDiagnostic(
+                            relative_path=path, status="failed",
+                            message="file produced no indexable content",
+                        )
+                    )
+                    continue
+                document_revisions[document.document_id] = revision.revision_id
+                indexed_files.append(path)
+                outcome.reused_paths.append(path)
+                await self._files.write_revision(handle, revision)
                 chunks.extend(reused)
 
             for path in change.removed if from_source else []:
@@ -308,7 +331,19 @@ class IndexBuilder:
                 if document is not None:
                     document_revisions.pop(document.document_id, None)
 
-            if not chunks:
+            if any(item.status == "failed" for item in outcome.diagnostics):
+                await self._files.discard(handle)
+                outcome.failed = True
+                outcome.reason = "one or more source files failed to index"
+                return outcome
+
+            empty_after_delete = (
+                not chunks
+                and not document_revisions
+                and not any(item.status == "failed" for item in outcome.diagnostics)
+                and await self._can_publish_empty(request, base, change)
+            )
+            if not chunks and not empty_after_delete:
                 await self._files.discard(handle)
                 outcome.failed = True
                 outcome.reason = "no indexable content in the selected scope"
@@ -321,7 +356,13 @@ class IndexBuilder:
                 outcome.cancelled = True
                 outcome.reason = "cancelled before sealing the snapshot"
                 return outcome
-            index_ref = await self._keyword_writer.build(chunks, self.keyword_profile)
+            index_ref = (
+                await self._keyword_writer.build_empty(
+                    request.kb_id, version_id, self.keyword_profile
+                )
+                if empty_after_delete
+                else await self._keyword_writer.build(chunks, self.keyword_profile)
+            )
             if await self._cancelled(request):
                 # The keyword build can be slow; a cancel that arrived while it
                 # ran must still leave the database and the source baseline
@@ -366,6 +407,7 @@ class IndexBuilder:
                 indexed_files,
                 pending_revisions,
                 expected_revisions,
+                change,
             )
             if not committed:
                 # Cancelled inside the transaction: nothing was written. The
@@ -379,6 +421,53 @@ class IndexBuilder:
             await self._files.discard(handle)
             raise
 
+    async def _can_publish_empty(
+        self, request: BuildRequest, base: str | None, change: ChangeSet | None
+    ) -> bool:
+        if base is None:
+            return False
+        previous = await self._snapshots.get(base)
+        if not previous.document_revisions:
+            return False
+        if change is not None:
+            return (
+                request.mode == "mirror"
+                and request.manifest is not None
+                and request.manifest.complete
+                and request.manifest.scan_status == "succeeded"
+                and bool(change.removed)
+                and not change.added
+                and not change.modified
+            )
+        # Manual deletion is recorded in the content repositories before the
+        # rebuild; an empty active set with a nonempty base is intentional.
+        return not await self._content.list_active_documents(request.kb_id) and (
+            self._qa_pairs is None or not await self._qa_pairs.list_active(request.kb_id)
+        )
+
+    async def _source_has_manual_edits(
+        self, request: BuildRequest, change: ChangeSet
+    ) -> bool:
+        if request.source_id is None or not await self._sources.has_baseline(request.source_id):
+            return False
+        active_manifest = await self._sources.get_active_manifest(request.source_id)
+        if active_manifest is None:
+            return False
+        imported = {entry.relative_path for entry in active_manifest.files}
+        revisions = await self._sources.get_baseline_revisions(request.source_id)
+        for path in (change.unchanged + change.modified + change.removed):
+            if path not in imported:
+                continue
+            document = await self._content.find_by_path(request.source_id, path)
+            if document is None or document.deleted or (
+                revisions.get(path) != document.latest_revision_id
+                and not await self._sources.is_import_revision(
+                    request.source_id, path, document.latest_revision_id
+                )
+            ):
+                return True
+        return False
+
     async def _commit(
         self,
         snapshot: Snapshot,
@@ -387,11 +476,33 @@ class IndexBuilder:
         indexed_files: list[str],
         pending_revisions: list[Revision],
         expected_revisions: dict[str, str | None],
+        change: ChangeSet | None,
     ) -> bool:
         """Write snapshot + baseline atomically; return False if cancelled first."""
         async with self._transaction():
             if await self._cancelled(request):
                 return False
+            if request.source_id is not None and request.manifest is not None:
+                previous = await self._sources.get_active_manifest(request.source_id)
+                current = ChangePlanner.diff(previous, request.manifest, request.mode)
+                if current != change:
+                    raise Conflict("the previewed source baseline", "the baseline changed")
+                if await self._source_has_manual_edits(request, current):
+                    raise Conflict(
+                        "unchanged source document revisions",
+                        "manual edits conflict with this import; resolve before applying",
+                    )
+                if snapshot.parent_version_id != (
+                    await self._knowledge.get(request.kb_id)
+                ).active_version_id:
+                    raise Conflict(
+                        "the active version at build start", "the active version changed"
+                    )
+                if request.expected_baseline_hash is not None:
+                    from .imports import baseline_hash
+
+                    if baseline_hash(previous) != request.expected_baseline_hash:
+                        raise Conflict("the previewed source baseline", "baseline changed")
             for revision in pending_revisions:
                 document = await self._content.find_by_path(
                     revision.source_id, revision.relative_path
@@ -409,11 +520,20 @@ class IndexBuilder:
                     await self._content.mark_deleted(document.document_id, None)
             await self._snapshots.save(snapshot)
             if request.source_id is not None and request.manifest is not None:
-                await self._sources.save_manifest(
-                    request.source_id,
-                    snapshot.version_id,
-                    _baseline_for(request.manifest, indexed_files),
+                baseline = _baseline_for(
+                    request.manifest, indexed_files, previous, request.mode
                 )
+                await self._sources.save_manifest(
+                    request.source_id, snapshot.version_id, baseline
+                )
+            for source in await self._sources.list(request.kb_id):
+                if source.source_id == request.source_id:
+                    continue
+                if await self._sources.has_baseline(source.source_id):
+                    inherited = await self._sources.get_current_manifest(source.source_id)
+                    await self._sources.record_version_manifest(
+                        source.source_id, snapshot.version_id, inherited
+                    )
         return True
 
     async def _index_source_base(
@@ -437,8 +557,6 @@ class IndexBuilder:
             revision = await self._content.latest_revision(document.document_id)
             if revision.source_id == request.source_id and revision.relative_path in replaced_paths:
                 continue
-            document_revisions[document.document_id] = revision.revision_id
-            await self._files.write_revision(handle, revision)
             reused = _rebased_chunks(base_chunks.get(revision.revision_id), version_id)
             if reused is None:
                 reused = self._splitter.split(
@@ -449,6 +567,16 @@ class IndexBuilder:
                     profile=self.chunk_profile,
                 )
                 outcome.parsed_paths.append(document.document_id)
+            if not reused:
+                outcome.diagnostics.append(
+                    JobFileDiagnostic(
+                        relative_path=revision.relative_path or document.document_id,
+                        status="failed", message="document has no indexable content",
+                    )
+                )
+                continue
+            document_revisions[document.document_id] = revision.revision_id
+            await self._files.write_revision(handle, revision)
             chunks.extend(reused)
         if self._qa_pairs is None:
             return
@@ -456,8 +584,6 @@ class IndexBuilder:
             if await self._cancelled(request):
                 return
             revision = await self._content.latest_revision(pair.qa_id)
-            document_revisions[pair.qa_id] = revision.revision_id
-            await self._files.write_revision(handle, revision)
             reused = _rebased_chunks(base_chunks.get(revision.revision_id), version_id)
             if reused is None:
                 reused = self._splitter.split(
@@ -468,6 +594,16 @@ class IndexBuilder:
                     profile=self.chunk_profile,
                 )
                 outcome.parsed_paths.append(pair.qa_id)
+            if not reused:
+                outcome.diagnostics.append(
+                    JobFileDiagnostic(
+                        relative_path=pair.qa_id, status="failed",
+                        message="QA pair has no indexable content",
+                    )
+                )
+                continue
+            document_revisions[pair.qa_id] = revision.revision_id
+            await self._files.write_revision(handle, revision)
             chunks.extend(reused)
 
     async def _index_repository(
@@ -500,8 +636,6 @@ class IndexBuilder:
                 and revision.relative_path in excluded_source_paths
             ):
                 continue
-            document_revisions[document.document_id] = revision.revision_id
-            await self._files.write_revision(handle, revision)
             reused = _rebased_chunks(base_chunks.get(revision.revision_id), version_id)
             if reused is None:
                 parsed = _stored_document(revision)
@@ -513,6 +647,16 @@ class IndexBuilder:
                     profile=self.chunk_profile,
                 )
                 outcome.parsed_paths.append(document.document_id)
+            if not reused:
+                outcome.diagnostics.append(
+                    JobFileDiagnostic(
+                        relative_path=revision.relative_path or document.document_id,
+                        status="failed", message="document has no indexable content",
+                    )
+                )
+                continue
+            document_revisions[document.document_id] = revision.revision_id
+            await self._files.write_revision(handle, revision)
             chunks.extend(reused)
         if self._qa_pairs is None:
             return
@@ -520,8 +664,6 @@ class IndexBuilder:
             if await self._cancelled(request):
                 return
             revision = await self._content.latest_revision(pair.qa_id)
-            document_revisions[pair.qa_id] = revision.revision_id
-            await self._files.write_revision(handle, revision)
             reused = _rebased_chunks(base_chunks.get(revision.revision_id), version_id)
             if reused is None:
                 parsed = _qa_document(pair)
@@ -533,6 +675,16 @@ class IndexBuilder:
                     profile=self.chunk_profile,
                 )
                 outcome.parsed_paths.append(pair.qa_id)
+            if not reused:
+                outcome.diagnostics.append(
+                    JobFileDiagnostic(
+                        relative_path=pair.qa_id, status="failed",
+                        message="QA pair has no indexable content",
+                    )
+                )
+                continue
+            document_revisions[pair.qa_id] = revision.revision_id
+            await self._files.write_revision(handle, revision)
             chunks.extend(reused)
 
     def _transaction(self):  # type: ignore[no-untyped-def]
@@ -591,7 +743,22 @@ class IndexBuilder:
             return None
         try:
             with Path(local).open("rb") as stream:
-                return await self._parser.parse(kind, stream, ParseOptions())
+                data = stream.read()
+            if request.manifest is not None:
+                expected = next(
+                    (entry for entry in request.manifest.files if entry.relative_path == path),
+                    None,
+                )
+                if expected is None:
+                    raise Conflict("manifest file", "file was not in the confirmed scan")
+                if (
+                    len(data) != expected.size
+                    or hashlib.sha256(data).hexdigest() != expected.digest
+                ):
+                    raise Conflict(
+                        "confirmed file bytes", "file changed after import confirmation"
+                    )
+            return await self._parser.parse(kind, io.BytesIO(data), ParseOptions())
         except ParseFailure as failure:
             outcome.diagnostics.append(
                 JobFileDiagnostic(
@@ -634,14 +801,12 @@ class IndexBuilder:
         report = ValidationReport()
         if not staged.keyword_profile or not staged.keyword_index_ref:
             report.problems.append("ready snapshot requires a keyword index and profile")
-        if not staged.document_revisions:
-            report.problems.append("snapshot has no document revision mapping")
         if len(set(staged.document_revisions.values())) != len(
             staged.document_revisions
         ):
             report.problems.append("one revision is mapped to several documents")
-        if not staged.document_revisions:
-            report.problems.append("snapshot has no indexed documents or QA pairs")
+        if not staged.document_revisions and staged.parent_version_id is None:
+            report.problems.append("initial snapshot cannot be empty")
         report.ok = not report.problems
         return report
 
@@ -649,10 +814,15 @@ class IndexBuilder:
 class SnapshotPublisher:
     """Compare-and-swap active pointer; failures leave the old version serving."""
 
-    def __init__(self, *, knowledge: object, snapshots: object, files: object) -> None:
+    def __init__(
+        self, *, knowledge: object, snapshots: object, files: object,
+        sources: object | None = None, store: object | None = None,
+    ) -> None:
         self._knowledge = knowledge
         self._snapshots = snapshots
         self._files = files
+        self._sources = sources
+        self._store = store
 
     async def publish(self, version_id: str, expected_active: str | None) -> Snapshot:
         snapshot = await self._snapshots.get(version_id)
@@ -663,6 +833,21 @@ class SnapshotPublisher:
             raise Conflict("ready version", f"state {snapshot.state.value}")
         if not await self._files.verify(snapshot.kb_id, snapshot.version_id):
             raise Conflict("verified snapshot files", "incomplete or corrupt snapshot")
+        if self._sources is not None and self._store is not None:
+            async with self._store.transaction():
+                swapped = await self._snapshots.compare_and_swap_active(
+                    snapshot.kb_id, expected_active, version_id
+                )
+                if not swapped:
+                    current = await self._knowledge.get(snapshot.kb_id)
+                    raise Conflict(
+                        f"active version {expected_active}",
+                        f"active version {current.active_version_id}",
+                    )
+                await self._sources.capture_version_baselines(snapshot.kb_id, version_id)
+                published = snapshot.model_copy(update={"state": SnapshotState.PUBLISHED})
+                await self._snapshots.save(published)
+            return published
         swapped = await self._snapshots.compare_and_swap_active(
             snapshot.kb_id, expected_active, version_id
         )
@@ -686,6 +871,22 @@ class SnapshotPublisher:
             raise Conflict("ready version", f"state {snapshot.state.value}")
         if not await self._files.verify(snapshot.kb_id, snapshot.version_id):
             raise Conflict("verified snapshot files", "incomplete or corrupt snapshot")
+        if self._sources is not None and self._store is not None:
+            async with self._store.transaction():
+                swapped = await self._snapshots.compare_and_swap_active(
+                    kb_id, expected_active, target
+                )
+                if not swapped:
+                    current = await self._knowledge.get(kb_id)
+                    raise Conflict(
+                        f"active version {expected_active}",
+                        f"active version {current.active_version_id}",
+                    )
+                await self._sources.restore_baselines(kb_id, target)
+                if snapshot.state != SnapshotState.PUBLISHED:
+                    snapshot = snapshot.model_copy(update={"state": SnapshotState.PUBLISHED})
+                    await self._snapshots.save(snapshot)
+            return snapshot
         swapped = await self._snapshots.compare_and_swap_active(
             kb_id, expected_active, target
         )
@@ -739,16 +940,35 @@ def _rebased_chunks(chunks: list[Chunk] | None, version_id: str) -> list[Chunk] 
     return [chunk.model_copy(update={"version_id": version_id}) for chunk in chunks]
 
 
-def _baseline_for(manifest: SourceManifest, indexed_files: list[str]) -> SourceManifest:
-    """Only files actually indexed become the baseline.
+def _baseline_for(
+    manifest: SourceManifest,
+    indexed_files: list[str],
+    previous: SourceManifest | None = None,
+    mode: str = "merge",
+) -> SourceManifest:
+    """Preserve unscanned files and merge-mode omissions in the source baseline.
 
-    If a file failed to parse, it stays out of the baseline so the next import
-    treats it as new instead of silently reusing a missing revision.
+    Mirror may remove absent paths only after an unrestricted successful full
+    scan. Merge leaves absent paths intact even when the scan was complete.
     """
     indexed = set(indexed_files)
+    merged = (
+        {entry.relative_path: entry for entry in previous.files}
+        if previous is not None
+        else {}
+    )
+    if mode == "mirror" and manifest.complete:
+        merged = {}
+    for entry in manifest.files:
+        if entry.relative_path in indexed:
+            merged[entry.relative_path] = entry
     return manifest.model_copy(
-        update={"files": [entry for entry in manifest.files
-                          if entry.relative_path in indexed]}
+        update={
+            "files": list(merged.values()),
+            "selection": Selection(),
+            "scan_scope": manifest.scan_scope,
+            "complete": manifest.complete,
+        }
     )
 
 

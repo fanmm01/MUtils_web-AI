@@ -120,13 +120,16 @@ class FileSnapshotStore:
         path = self.version_dir(kb_id, version_id)
         if not path.is_dir():
             return False
-        return await asyncio.to_thread(_verify_dir, path)
+        return await asyncio.to_thread(_verify_dir, path, kb_id, version_id)
 
     async def load_chunks(self, kb_id: ID, version_id: ID, ids: list[ID]) -> list[Chunk]:
         return await asyncio.to_thread(self._load_chunks_sync, kb_id, version_id, set(ids))
 
     def _load_chunks_sync(self, kb_id: ID, version_id: ID, wanted: set[str]) -> list[Chunk]:
-        path = self.version_dir(kb_id, version_id) / CHUNKS_FILE
+        directory = self.version_dir(kb_id, version_id)
+        if not _verify_dir(directory, kb_id, version_id):
+            raise ResourceGone("snapshot files")
+        path = directory / CHUNKS_FILE
         if not path.is_file():
             raise NotFound("chunk file")
         found: list[Chunk] = []
@@ -146,7 +149,10 @@ class FileSnapshotStore:
         return await asyncio.to_thread(self._load_all_sync, kb_id, version_id)
 
     def _load_all_sync(self, kb_id: ID, version_id: ID) -> list[Chunk]:
-        path = self.version_dir(kb_id, version_id) / CHUNKS_FILE
+        directory = self.version_dir(kb_id, version_id)
+        if not _verify_dir(directory, kb_id, version_id):
+            raise ResourceGone("snapshot files")
+        path = directory / CHUNKS_FILE
         if not path.is_file():
             raise NotFound("chunk file")
         chunks = [
@@ -164,10 +170,16 @@ class FileSnapshotStore:
         )
 
     def _load_revision_sync(self, kb_id: ID, version_id: ID, revision_id: ID) -> Revision:
-        path = self.version_dir(kb_id, version_id) / REVISION_DIR / f"{_safe(revision_id)}.json"
+        directory = self.version_dir(kb_id, version_id)
+        if not _verify_dir(directory, kb_id, version_id):
+            raise ResourceGone("snapshot files")
+        path = directory / REVISION_DIR / f"{_safe(revision_id)}.json"
         if not path.is_file():
             raise NotFound("revision")
-        return Revision.model_validate_json(path.read_text(encoding="utf-8"))
+        revision = Revision.model_validate_json(path.read_text(encoding="utf-8"))
+        if revision.revision_id != revision_id:
+            raise ResourceGone("revision files")
+        return revision
 
     def _staging(self, handle: ID) -> Path:
         path = self.root / "staging" / _safe(handle)
@@ -227,10 +239,9 @@ class PublishedSnapshotReader:
         return ResolvedScope(scope_id=scope_id, targets=pinned)
 
     async def search_scope(self, target: PinnedKBTarget, access: AccessScope) -> SearchScope:
+        self._require_wired()
         self._authorize(target.kb_id, access)
         snapshot = await self._pin(target.kb_id, target.version_id)
-        if snapshot.state not in {SnapshotState.READY, SnapshotState.PUBLISHED}:
-            raise Conflict("ready version", f"state {snapshot.state.value}")
         await self._require_files(snapshot)
         assert snapshot.keyword_profile and snapshot.keyword_index_ref
         return SearchScope(
@@ -245,8 +256,10 @@ class PublishedSnapshotReader:
     async def load_chunks(
         self, target: PinnedKBTarget, ids: list[ID], access: AccessScope
     ) -> list[Chunk]:
+        self._require_wired()
         self._authorize(target.kb_id, access)
-        await self._pin(target.kb_id, target.version_id)
+        snapshot = await self._pin(target.kb_id, target.version_id)
+        await self._require_files(snapshot)
         return await self._files.load_chunks(target.kb_id, target.version_id, ids)
 
     async def load_revision(self, revision_id: ID, access: AccessScope) -> Revision:
@@ -264,8 +277,11 @@ class PublishedSnapshotReader:
         # A citation must be read from the immutable snapshot that contains that
         # revision, never from the current document body.
         for snapshot in await self._snapshots.list(kb_id):
+            if snapshot.state != SnapshotState.PUBLISHED:
+                continue
             if snapshot.document_revisions.get(document_id) != revision_id:
                 continue
+            await self._require_files(snapshot)
             try:
                 return await self._files.load_revision(
                     kb_id, snapshot.version_id, revision_id
@@ -301,11 +317,10 @@ class PublishedSnapshotReader:
         return snapshot
 
     async def _require_files(self, snapshot: Snapshot) -> None:
-        if snapshot.state == SnapshotState.FAILED:
-            raise Conflict("ready version", "failed version")
-        if snapshot.state in {SnapshotState.READY, SnapshotState.PUBLISHED}:
-            if not await self._files.verify(snapshot.kb_id, snapshot.version_id):
-                raise ResourceGone("snapshot files")
+        if snapshot.state != SnapshotState.PUBLISHED:
+            raise NotFound("published version")
+        if not await self._files.verify(snapshot.kb_id, snapshot.version_id):
+            raise ResourceGone("snapshot files")
 
 
 def _safe(value: str) -> str:
@@ -325,14 +340,41 @@ def _digest(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _verify_dir(path: Path) -> bool:
+def _verify_dir(path: Path, kb_id: ID, version_id: ID) -> bool:
     manifest = path / MANIFEST_FILE
     if not manifest.is_file():
         return False
-    payload = json.loads(manifest.read_text(encoding="utf-8"))
-    digests = payload.get("digests") or {}
-    for relative, expected in digests.items():
-        candidate = path / relative
-        if not candidate.is_file() or _digest(candidate) != expected:
+    try:
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
             return False
-    return True
+        if payload.get("kb_id") != kb_id or payload.get("version_id") != version_id:
+            return False
+        digests = payload.get("digests")
+        if not isinstance(digests, dict) or CHUNKS_FILE not in digests:
+            return False
+        expected_files = {CHUNKS_FILE}
+        for candidate in path.rglob("*"):
+            if candidate.is_symlink():
+                return False
+            if candidate.is_file() and candidate != manifest:
+                expected_files.add(candidate.relative_to(path).as_posix())
+        if set(digests) != expected_files:
+            return False
+        for relative, expected in digests.items():
+            parts = relative.split("/")
+            if (
+                not parts
+                or any(part in {"", ".", ".."} for part in parts)
+                or "\\" in relative
+                or ":" in relative
+                or not isinstance(expected, str)
+                or len(expected) != 64
+            ):
+                return False
+            candidate = path.joinpath(*parts)
+            if not candidate.is_file() or candidate.is_symlink() or _digest(candidate) != expected:
+                return False
+        return True
+    except (OSError, ValueError, TypeError):
+        return False

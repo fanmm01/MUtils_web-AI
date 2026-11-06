@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 from collections.abc import Sequence
 from typing import Any
 
@@ -28,7 +29,7 @@ from qa_contracts.knowledge import (
     Source,
     SourceManifest,
 )
-from qa_contracts.operations import Job, JobCommand, JobEvent, JobState
+from qa_contracts.operations import Job, JobCommand, JobEvent, JobKind, JobState
 
 from .sqlite import SQLiteStore
 
@@ -208,12 +209,26 @@ class SQLiteKnowledgeRepository:
 
     async def delete(self, kb_id: ID, expected_etag: str | None) -> None:
         async with self._store.transaction():
-            row = await self._store.fetchone("SELECT etag FROM kbs WHERE kb_id = ?", (kb_id,))
+            row = await self._store.fetchone(
+                "SELECT etag, active_version_id FROM kbs WHERE kb_id = ?", (kb_id,)
+            )
             if row is None:
                 raise NotFound("knowledge base")
             if expected_etag is not None and row["etag"] != expected_etag:
                 raise Conflict(f"etag {expected_etag}", f"etag {row['etag']}")
+            if row["active_version_id"] is not None or await self.has_dependents(kb_id):
+                raise Conflict("empty knowledge base", "dependent content or versions exist")
             await self._store.execute("DELETE FROM kbs WHERE kb_id = ?", (kb_id,))
+
+    async def has_dependents(self, kb_id: ID) -> bool:
+        """Include tombstones/history: deleting their KB would orphan rows."""
+        for table in ("sources", "documents", "qa_pairs", "snapshots"):
+            row = await self._store.fetchone(
+                f"SELECT 1 FROM {table} WHERE kb_id = ? LIMIT 1", (kb_id,)
+            )
+            if row is not None:
+                return True
+        return False
 
     async def all(self) -> list[KnowledgeBase]:
         rows = await self._store.fetchall("SELECT * FROM kbs ORDER BY kb_id")
@@ -237,37 +252,77 @@ class SQLiteSourceRepository:
         return [_source(row) for row in rows]
 
     async def put(self, source: Source, expected_revision: ID | None) -> Source:
-        row = await self._store.fetchone(
-            "SELECT revision FROM sources WHERE source_id = ?", (source.source_id,)
-        )
-        if row is None:
-            if expected_revision is not None:
-                raise NotFound("source")
-            await self._store.execute(
-                "INSERT INTO sources (source_id, kb_id, kind, root_id, display_name, revision,"
-                " created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (source.source_id, source.kb_id, source.kind, source.root_id,
-                 source.display_name, source.revision, source.created_at.isoformat()),
+        """CAS updates always mint a fresh revision; stale PATCH cannot win."""
+        async with self._store.transaction():
+            row = await self._store.fetchone(
+                "SELECT kb_id, revision FROM sources WHERE source_id = ?",
+                (source.source_id,),
             )
-            return source
-        if expected_revision is not None and row["revision"] != expected_revision:
-            raise Conflict(f"revision {expected_revision}", f"revision {row['revision']}")
-        await self._store.execute(
-            "UPDATE sources SET kind = ?, root_id = ?, display_name = ?, revision = ?"
-            " WHERE source_id = ?",
-            (source.kind, source.root_id, source.display_name, source.revision, source.source_id),
-        )
-        return source
+            if row is None:
+                if expected_revision is not None:
+                    raise NotFound("source")
+                await self._store.execute(
+                    "INSERT INTO sources (source_id, kb_id, kind, root_id, display_name, revision,"
+                    " created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (source.source_id, source.kb_id, source.kind, source.root_id,
+                     source.display_name, source.revision, source.created_at.isoformat()),
+                )
+                return source
+            if row["kb_id"] != source.kb_id:
+                raise Conflict(f"source in {row['kb_id']}", f"source in {source.kb_id}")
+            if expected_revision != row["revision"]:
+                raise Conflict(
+                    f"revision {expected_revision}", f"revision {row['revision']}"
+                )
+            new_revision = uuid.uuid4().hex
+            await self._store.execute(
+                "UPDATE sources SET kind = ?, root_id = ?, display_name = ?, revision = ?"
+                " WHERE source_id = ? AND revision = ?",
+                (source.kind, source.root_id, source.display_name, new_revision,
+                 source.source_id, expected_revision),
+            )
+            return source.model_copy(update={"revision": new_revision})
 
     async def remove(self, source_id: ID) -> None:
-        deleted = await self._store.execute(
-            "DELETE FROM sources WHERE source_id = ?", (source_id,)
-        )
-        if not deleted:
-            raise NotFound("source")
+        async with self._store.transaction():
+            row = await self._store.fetchone(
+                "SELECT 1 FROM sources WHERE source_id = ?", (source_id,)
+            )
+            if row is None:
+                raise NotFound("source")
+            for table, condition in (
+                ("revisions", "source_id = ?"),
+                ("source_baselines", "source_id = ?"),
+                ("source_version_baselines", "source_id = ?"),
+                ("upload_batches", "source_id = ?"),
+                ("import_previews", "source_id = ?"),
+            ):
+                dependent = await self._store.fetchone(
+                    f"SELECT 1 FROM {table} WHERE {condition} LIMIT 1", (source_id,)
+                )
+                if dependent is not None:
+                    raise Conflict("source without dependent data", "source history still exists")
+            jobs = await self._store.fetchall(
+                "SELECT payload FROM jobs WHERE kind = ?", (JobKind.IMPORT.value,)
+            )
+            if any(
+                _parse(job["payload"], {}).get("source_id") == source_id
+                for job in jobs
+            ):
+                raise Conflict("source without dependent data", "source jobs still exist")
+            await self._store.execute("DELETE FROM sources WHERE source_id = ?", (source_id,))
 
     async def get_manifest(self, source_id: ID, version_id: ID) -> SourceManifest:
-        del version_id
+        if version_id:
+            row = await self._store.fetchone(
+                "SELECT manifest FROM source_version_baselines"
+                " WHERE source_id = ? AND version_id = ?",
+                (source_id, version_id),
+            )
+            if row is not None:
+                if row["manifest"] is None:
+                    raise NotFound("source baseline")
+                return SourceManifest.model_validate_json(row["manifest"])
         row = await self._store.fetchone(
             "SELECT manifest FROM source_baselines WHERE source_id = ?", (source_id,)
         )
@@ -275,17 +330,182 @@ class SQLiteSourceRepository:
             raise NotFound("source baseline")
         return SourceManifest.model_validate_json(row["manifest"])
 
+    async def get_current_manifest(self, source_id: ID) -> SourceManifest:
+        return await self.get_manifest(source_id, "")
+
     async def save_manifest(
         self, source_id: ID, version_id: ID, manifest: SourceManifest
     ) -> None:
-        del version_id
+        revisions: dict[str, str] = {}
+        for entry in manifest.files:
+            row = await self._store.fetchone(
+                "SELECT documents.latest_revision_id FROM documents JOIN revisions"
+                " ON revisions.revision_id = documents.latest_revision_id"
+                " WHERE revisions.source_id = ? AND revisions.relative_path = ?"
+                " AND documents.deleted = 0",
+                (source_id, entry.relative_path),
+            )
+            if row is not None:
+                revisions[entry.relative_path] = row["latest_revision_id"]
+        if version_id:
+            existing = await self._store.fetchone(
+                "SELECT manifest, revision_ids FROM source_version_baselines"
+                " WHERE source_id = ? AND version_id = ?",
+                (source_id, version_id),
+            )
+            if existing is None:
+                await self._store.execute(
+                    "INSERT INTO source_version_baselines"
+                    " (source_id, version_id, manifest, revision_ids) VALUES (?, ?, ?, ?)",
+                    (source_id, version_id, manifest.model_dump_json(), _json(revisions)),
+                )
+            elif existing["manifest"] != manifest.model_dump_json():
+                raise Conflict("immutable source baseline", "version baseline changed")
         await self._store.execute(
-            "INSERT INTO source_baselines (source_id, manifest, updated_at)"
-            " VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+            "INSERT INTO source_baselines (source_id, manifest, revision_ids, updated_at)"
+            " VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
             " ON CONFLICT(source_id) DO UPDATE SET manifest = excluded.manifest,"
-            " updated_at = excluded.updated_at",
-            (source_id, manifest.model_dump_json()),
+            " revision_ids = excluded.revision_ids, updated_at = excluded.updated_at",
+            (source_id, manifest.model_dump_json(), _json(revisions)),
         )
+
+    async def record_version_manifest(
+        self, source_id: ID, version_id: ID, manifest: SourceManifest
+    ) -> None:
+        """Copy a source's current baseline without moving its global pointer."""
+        row = await self._store.fetchone(
+            "SELECT revision_ids FROM source_baselines WHERE source_id = ?", (source_id,)
+        )
+        revisions = row["revision_ids"] if row is not None else "{}"
+        existing = await self._store.fetchone(
+            "SELECT manifest FROM source_version_baselines"
+            " WHERE source_id = ? AND version_id = ?",
+            (source_id, version_id),
+        )
+        if existing is not None:
+            if existing["manifest"] != manifest.model_dump_json():
+                raise Conflict("immutable source baseline", "version baseline changed")
+            return
+        await self._store.execute(
+            "INSERT INTO source_version_baselines"
+            " (source_id, version_id, manifest, revision_ids) VALUES (?, ?, ?, ?)",
+            (source_id, version_id, manifest.model_dump_json(), revisions),
+        )
+
+    async def save_current_manifest(self, source_id: ID, manifest: SourceManifest) -> None:
+        """Refresh the working baseline without rewriting a sealed version."""
+        revisions = await self.get_baseline_revisions(source_id)
+        await self._store.execute(
+            "UPDATE source_baselines SET manifest = ?, revision_ids = ?,"
+            " updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE source_id = ?",
+            (manifest.model_dump_json(), _json(revisions), source_id),
+        )
+
+    async def get_baseline_revisions(
+        self, source_id: ID, version_id: ID | None = None
+    ) -> dict[str, str]:
+        if version_id:
+            row = await self._store.fetchone(
+                "SELECT revision_ids FROM source_version_baselines"
+                " WHERE source_id = ? AND version_id = ?",
+                (source_id, version_id),
+            )
+            if row is not None:
+                return _parse(row["revision_ids"], {})
+        row = await self._store.fetchone(
+            "SELECT revision_ids FROM source_baselines WHERE source_id = ?", (source_id,)
+        )
+        if row is None:
+            return {}
+        return _parse(row["revision_ids"], {})
+
+    async def is_import_revision(
+        self, source_id: ID, relative_path: str, revision_id: ID
+    ) -> bool:
+        rows = await self._store.fetchall(
+            "SELECT revision_ids FROM source_version_baselines WHERE source_id = ?",
+            (source_id,),
+        )
+        return any(
+            _parse(row["revision_ids"], {}).get(relative_path) == revision_id
+            for row in rows
+        )
+
+    async def get_active_manifest(self, source_id: ID) -> SourceManifest | None:
+        """Use the active snapshot, or the working baseline before first publish."""
+        version_id = await self.active_baseline_version(source_id)
+        if version_id is None:
+            row = await self._store.fetchone(
+                "SELECT manifest FROM source_baselines WHERE source_id = ?", (source_id,)
+            )
+            return SourceManifest.model_validate_json(row["manifest"]) if row else None
+        row = await self._store.fetchone(
+            "SELECT manifest FROM source_version_baselines"
+            " WHERE source_id = ? AND version_id = ?",
+            (source_id, version_id),
+        )
+        if row is None or row["manifest"] is None:
+            return None
+        return SourceManifest.model_validate_json(row["manifest"])
+
+    async def active_baseline_version(self, source_id: ID) -> str | None:
+        row = await self._store.fetchone(
+            "SELECT kbs.active_version_id FROM sources JOIN kbs"
+            " ON kbs.kb_id = sources.kb_id WHERE sources.source_id = ?",
+            (source_id,),
+        )
+        return row["active_version_id"] if row else None
+
+    async def has_version_baseline(self, source_id: ID, version_id: ID) -> bool:
+        row = await self._store.fetchone(
+            "SELECT 1 FROM source_version_baselines"
+            " WHERE source_id = ? AND version_id = ?",
+            (source_id, version_id),
+        )
+        return row is not None
+
+    async def capture_version_baselines(self, kb_id: ID, version_id: ID) -> None:
+        """Pin each source's current baseline when this version becomes active."""
+        for source in await self.list(kb_id):
+            if await self.has_version_baseline(source.source_id, version_id):
+                continue
+            row = await self._store.fetchone(
+                "SELECT manifest, revision_ids FROM source_baselines WHERE source_id = ?",
+                (source.source_id,),
+            )
+            await self._store.execute(
+                "INSERT INTO source_version_baselines"
+                " (source_id, version_id, manifest, revision_ids) VALUES (?, ?, ?, ?)",
+                (
+                    source.source_id,
+                    version_id,
+                    row["manifest"] if row is not None else None,
+                    row["revision_ids"] if row is not None else "{}",
+                ),
+            )
+
+    async def restore_baselines(self, kb_id: ID, version_id: ID) -> None:
+        """Restore source baselines saved with a snapshot during rollback."""
+        for source in await self.list(kb_id):
+            row = await self._store.fetchone(
+                "SELECT manifest, revision_ids FROM source_version_baselines"
+                " WHERE source_id = ? AND version_id = ?",
+                (source.source_id, version_id),
+            )
+            if row is None:
+                raise Conflict("snapshot source baselines", "missing version baseline")
+            if row["manifest"] is None:
+                await self._store.execute(
+                    "DELETE FROM source_baselines WHERE source_id = ?", (source.source_id,)
+                )
+                continue
+            await self._store.execute(
+                "INSERT INTO source_baselines (source_id, manifest, revision_ids, updated_at)"
+                " VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
+                " ON CONFLICT(source_id) DO UPDATE SET manifest = excluded.manifest,"
+                " revision_ids = excluded.revision_ids, updated_at = excluded.updated_at",
+                (source.source_id, row["manifest"], row["revision_ids"]),
+            )
 
     async def has_baseline(self, source_id: ID) -> bool:
         row = await self._store.fetchone(
@@ -644,10 +864,12 @@ class SQLiteJobRepository:
     async def renew_lease(self, job_id: ID, worker_id: ID, lease_until: object) -> bool:
         async with self._store.transaction():
             return bool(await self._store.execute(
-                "UPDATE jobs SET lease_until = ?, revision = revision + 1"
-                " WHERE job_id = ? AND worker_id = ? AND state IN (?, ?)",
+                "UPDATE jobs SET lease_until = ?"
+                " WHERE job_id = ? AND worker_id = ? AND state IN (?, ?)"
+                " AND lease_until > ?",
                 (_iso(lease_until), job_id, worker_id,
-                 JobState.RUNNING.value, JobState.CANCEL_REQUESTED.value),
+                 JobState.RUNNING.value, JobState.CANCEL_REQUESTED.value,
+                 _iso(utc_now())),
             ))
 
     async def update(self, job: Job, expected_revision: int) -> Job:
@@ -674,9 +896,37 @@ class SQLiteJobRepository:
             return _job(row)
 
     async def update_with_event(
-        self, job: Job, expected_revision: int, event: JobEvent
+        self, job: Job, expected_revision: int, event: JobEvent,
+        *, worker_id: ID | None = None,
     ) -> Job:
         async with self._store.transaction():
+            previous = await self._store.fetchone(
+                "SELECT state, worker_id, lease_until, revision FROM jobs WHERE job_id = ?",
+                (job.job_id,),
+            )
+            if previous is None:
+                raise NotFound("job")
+            if previous["revision"] != expected_revision:
+                raise Conflict(
+                    f"revision {expected_revision}", f"revision {previous['revision']}"
+                )
+            if previous["worker_id"] is not None and worker_id is None:
+                raise Conflict("active worker lease", "worker identity is required")
+            if worker_id is not None:
+                if (
+                    previous["worker_id"] != worker_id
+                    or previous["state"] not in (
+                        JobState.RUNNING.value, JobState.CANCEL_REQUESTED.value,
+                    )
+                    or previous["lease_until"] is None
+                    or previous["lease_until"] <= _iso(utc_now())
+                ):
+                    raise Conflict("active worker lease", "lease lost or expired")
+                if (
+                    previous["state"] == JobState.CANCEL_REQUESTED.value
+                    and job.state != JobState.CANCELLED
+                ):
+                    raise Conflict("cancelled job", "cancellation is pending")
             updated = await self._store.execute(
                 "UPDATE jobs SET state = ?, progress = ?, lease_until = ?, worker_id = ?,"
                 " result_version_id = ?, diagnostics = ?, error_code = ?,"
@@ -724,29 +974,30 @@ class SQLiteJobRepository:
             )
             recovered: list[Job] = []
             for row in rows:
-                state = (
-                    JobState.CANCELLED
-                    if row["state"] == JobState.CANCEL_REQUESTED.value
-                    else JobState.QUEUED
-                )
-                await self._store.execute(
-                    "UPDATE jobs SET state = ?, lease_until = NULL, worker_id = NULL,"
-                    " revision = revision + 1 WHERE job_id = ?",
-                    (state.value, row["job_id"]),
-                )
-                if state == JobState.CANCELLED:
+                if row["state"] == JobState.RUNNING.value:
                     await self._store.execute(
-                        "INSERT INTO job_events (job_id, seq, event)"
-                        " SELECT ?, COALESCE(MAX(seq), 0) + 1, ? FROM job_events"
-                        " WHERE job_id = ?",
-                        (
-                            row["job_id"],
-                            JobEvent(
-                                job_id=row["job_id"], seq=1, event="job.cancelled",
-                                diagnostic="worker lease expired while cancelling",
-                            ).model_dump_json(),
-                            row["job_id"],
-                        ),
+                        "UPDATE jobs SET state = ?, lease_until = NULL, worker_id = NULL,"
+                        " revision = revision + 1 WHERE job_id = ?",
+                        (JobState.QUEUED.value, row["job_id"]),
+                    )
+                else:
+                    event_row = await self._store.fetchone(
+                        "SELECT COALESCE(MAX(seq), 0) AS seq FROM job_events WHERE job_id = ?",
+                        (row["job_id"],),
+                    )
+                    seq = int(event_row["seq"] or 0) + 1
+                    event = JobEvent(
+                        job_id=row["job_id"], seq=seq, event="job.cancelled",
+                        diagnostic="worker lease expired while cancelling",
+                    )
+                    await self._store.execute(
+                        "UPDATE jobs SET state = ?, lease_until = NULL, worker_id = NULL,"
+                        " revision = revision + 1 WHERE job_id = ?",
+                        (JobState.CANCELLED.value, row["job_id"]),
+                    )
+                    await self._store.execute(
+                        "INSERT INTO job_events (job_id, seq, event) VALUES (?, ?, ?)",
+                        (row["job_id"], seq, event.model_dump_json()),
                     )
                 fresh = await self._store.fetchone(
                     "SELECT * FROM jobs WHERE job_id = ?", (row["job_id"],)

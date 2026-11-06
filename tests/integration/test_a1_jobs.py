@@ -11,12 +11,14 @@ import asyncio
 import hashlib
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from kb_management.indexing import BuildOutcome, BuildRequest, IndexBuilder
+from qa_contracts.errors import Conflict
 from qa_contracts.knowledge import ChunkProfile, ManifestFile, SourceManifest
 from qa_contracts.operations import JobCommand, JobKind, JobState
-from qa_service.worker import _finish
+from qa_service.worker import _confirm_cancel, _finish
 
 
 def _prepare_running_job(client: TestClient) -> str:
@@ -316,6 +318,85 @@ async def test_expired_cancel_request_is_reconciled_to_cancelled(jobs) -> None:
     assert [job.state for job in recovered] == [JobState.CANCELLED]
     events = await jobs.read_events("job-c", 0, 10)
     assert [event.event.value for event in events] == ["job.cancelled"]
+
+
+async def test_recovered_cancel_event_matches_db_sequence_and_cursor(jobs) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from qa_contracts.operations import JobEvent
+
+    job_id = "recover-events"
+    await jobs.enqueue(JobCommand(kind=JobKind.IMPORT), job_id)
+    await jobs.append_event(
+        job_id, JobEvent(job_id=job_id, seq=1, event="job.accepted")
+    )
+    await jobs.append_event(
+        job_id, JobEvent(job_id=job_id, seq=1, event="job.progress", progress=0.2)
+    )
+    claimed = await jobs.claim(
+        JobKind.IMPORT.value, "worker-a", datetime.now(UTC) - timedelta(seconds=1)
+    )
+    assert claimed is not None
+    await jobs.update(
+        claimed.model_copy(update={"state": JobState.CANCEL_REQUESTED}), claimed.revision
+    )
+    assert (await jobs.recover(datetime.now(UTC)))[0].state == JobState.CANCELLED
+    resumed = await jobs.read_events(job_id, 2, 10)
+    assert [(event.seq, event.event.value) for event in resumed] == [
+        (3, "job.cancelled")
+    ]
+    rows = await jobs._store.fetchall(
+        "SELECT seq, event FROM job_events WHERE job_id = ? ORDER BY seq", (job_id,)
+    )
+    assert [row["seq"] for row in rows] == [1, 2, 3]
+    assert [JobEvent.model_validate_json(row["event"]).seq for row in rows] == [1, 2, 3]
+    assert await jobs.read_events(job_id, 3, 10) == []
+
+
+async def test_heartbeat_then_finish_preserves_claim_revision(jobs) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    job_id = "heartbeat-job"
+    await jobs.enqueue(JobCommand(kind=JobKind.IMPORT), job_id)
+    claimed = await jobs.claim(
+        JobKind.IMPORT.value, "worker-a", datetime.now(UTC) + timedelta(seconds=60)
+    )
+    assert claimed is not None
+    assert await jobs.renew_lease(
+        job_id, "worker-a", datetime.now(UTC) + timedelta(seconds=120)
+    )
+    assert (await jobs.get(job_id)).revision == claimed.revision
+    assert await _finish(jobs, claimed, JobState.SUCCEEDED, event="job.completed") == job_id
+    current = await jobs.get(job_id)
+    assert current.state == JobState.SUCCEEDED
+    assert current.worker_id is None
+    assert (await jobs.read_events(job_id, 0, 10))[-1].event.value == "job.completed"
+
+
+async def test_expired_lease_reclaimed_worker_cannot_finish_or_cancel(jobs) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    job_id = "lease-takeover"
+    await jobs.enqueue(JobCommand(kind=JobKind.IMPORT), job_id)
+    old = await jobs.claim(
+        JobKind.IMPORT.value, "worker-old", datetime.now(UTC) - timedelta(seconds=1)
+    )
+    assert old is not None
+    await jobs.recover(datetime.now(UTC))
+    current = await jobs.claim(
+        JobKind.IMPORT.value, "worker-new", datetime.now(UTC) + timedelta(seconds=120)
+    )
+    assert current is not None and current.worker_id == "worker-new"
+    assert not await jobs.renew_lease(
+        job_id, "worker-old", datetime.now(UTC) + timedelta(seconds=120)
+    )
+    with pytest.raises(Conflict):
+        await _finish(jobs, old, JobState.SUCCEEDED, event="job.completed")
+    with pytest.raises(Conflict):
+        await _confirm_cancel(jobs, old)
+    assert (await jobs.get(job_id)).state == JobState.RUNNING
+    assert (await jobs.get(job_id)).worker_id == "worker-new"
+    assert await jobs.read_events(job_id, 0, 10) == []
 
 
 async def test_expired_running_job_is_requeued(jobs) -> None:

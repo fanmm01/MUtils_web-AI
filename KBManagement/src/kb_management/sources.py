@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
 
-from qa_contracts.errors import NotFound, PermissionDenied, ValidationFailed
+from qa_contracts.errors import Conflict, NotFound, PermissionDenied, ValidationFailed
 from qa_contracts.knowledge import (
     ManifestFile,
     Selection,
@@ -281,11 +281,14 @@ class SourceService:
             raise ValidationFailed([_detail("source_id", "must match the URL")])
         if current.kb_id != req.kb_id:
             raise ValidationFailed([_detail("kb_id", "a source cannot move between bases")])
-        return await self._sources.put(req, current.revision)
+        if current.revision != req.revision:
+            raise Conflict(f"revision {req.revision}", f"revision {current.revision}")
+        return await self._sources.put(req, req.revision)
 
     async def remove(self, source_id: str) -> None:
+        # The repository rejects sources with history/upload batches: removing
+        # their configuration would orphan the baseline and permit ID reuse.
         await self._sources.remove(source_id)
-        await self._sources.delete_baseline(source_id)
 
 
 class DirectoryPoller:

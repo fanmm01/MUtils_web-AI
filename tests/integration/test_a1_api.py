@@ -60,6 +60,70 @@ def test_kb_crud_and_conflicts(api: TestClient) -> None:
     assert api.get(f"/v1/kbs/{kb['kb_id']}").status_code == 404
 
 
+def test_cross_kb_patch_cannot_rehome_document_or_qa(api: TestClient) -> None:
+    first = _create_kb(api, name="first")
+    second = _create_kb(api, name="second")
+    doc = _document(api, first["kb_id"], "manual", "original document")
+    qa = api.post(
+        f"/v1/kbs/{first['kb_id']}/qa-pairs",
+        json={
+            "kb_id": first["kb_id"], "question": "original question",
+            "answer": "original answer",
+        },
+    )
+    assert qa.status_code == 202, qa.text
+    doc_before = api.get(f"/v1/documents/{doc['document_id']}").json()
+    qa_id = qa.json()["document_id"]
+    qa_before = api.get(f"/v1/qa-pairs/{qa_id}").json()
+    versions_before = api.get(f"/v1/kbs/{second['kb_id']}/versions").json()
+
+    bad_doc = api.patch(
+        f"/v1/documents/{doc['document_id']}",
+        json={
+            "kb_id": second["kb_id"], "title": "stolen", "text": "wrong kb",
+            "expected_revision_id": doc_before["revision"]["revision_id"],
+        },
+    )
+    bad_qa = api.patch(
+        f"/v1/qa-pairs/{qa_id}",
+        json={
+            "kb_id": second["kb_id"], "question": "stolen", "answer": "wrong kb",
+            "expected_revision_id": qa_before["revision_id"],
+        },
+    )
+    for rejected in (bad_doc, bad_qa):
+        assert rejected.status_code == 422, rejected.text
+        assert rejected.json()["error"]["code"] == "VALIDATION_FAILED"
+    assert api.get(f"/v1/documents/{doc['document_id']}").json() == doc_before
+    assert api.get(f"/v1/qa-pairs/{qa_id}").json() == qa_before
+    assert api.get(f"/v1/kbs/{second['kb_id']}/versions").json() == versions_before
+    assert api.get(f"/v1/kbs/{second['kb_id']}/documents").json()["items"] == []
+    assert api.get(f"/v1/kbs/{second['kb_id']}/qa-pairs").json()["items"] == []
+
+
+def test_source_patch_mints_revision_and_rejects_stale_token(api: TestClient) -> None:
+    kb = _create_kb(api)
+    created = api.post(
+        f"/v1/kbs/{kb['kb_id']}/sources",
+        json={
+            "source_id": "src_revision", "kb_id": kb["kb_id"],
+            "kind": "local_root", "root_id": "root1",
+            "display_name": "old", "revision": "revision-1",
+        },
+    )
+    assert created.status_code == 201, created.text
+    body = {**created.json(), "display_name": "new"}
+    updated = api.patch("/v1/sources/src_revision", json=body)
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["revision"] != body["revision"]
+    assert updated.json()["display_name"] == "new"
+    stale = api.patch(
+        "/v1/sources/src_revision", json={**body, "display_name": "stale"}
+    )
+    assert stale.status_code == 409, stale.text
+    assert api.get("/v1/sources/src_revision").json() == updated.json()
+
+
 def test_document_and_qa_crud(api: TestClient) -> None:
     kb = _create_kb(api)
     receipt = _document(api, kb["kb_id"], "手册", "第一版正文")
@@ -380,6 +444,60 @@ def test_documents_and_qa_pairs_enter_a_rebuilt_snapshot(api: TestClient) -> Non
     next_texts = [chunk["text"] for chunk in _snapshot_chunks(api, kb["kb_id"], next_version)]
     assert any("服务清单" in text for text in next_texts)
     assert any(text.startswith("Question: 怎么备份？") for text in next_texts)
+
+
+def test_deleting_the_only_qa_publishes_an_empty_snapshot(api: TestClient) -> None:
+    kb = _create_kb(api)
+    qa = api.post(
+        f"/v1/kbs/{kb['kb_id']}/qa-pairs",
+        json={"kb_id": kb["kb_id"], "question": "only question", "answer": "only answer"},
+    )
+    assert qa.status_code == 202, qa.text
+    initial = qa.json()["version_id"]
+    assert api.post(
+        f"/v1/versions/{initial}/publish", json={"expected_active_version_id": None}
+    ).status_code == 200
+    pair = api.get(f"/v1/qa-pairs/{qa.json()['document_id']}").json()
+    deleted = api.delete(
+        f"/v1/qa-pairs/{pair['qa_id']}",
+        params={"expected_revision_id": pair["revision_id"]},
+    )
+    assert deleted.status_code == 200, deleted.text
+    empty_version = deleted.json()["version_id"]
+    assert empty_version and empty_version != initial
+    snapshot = api.get(f"/v1/versions/{empty_version}").json()
+    assert snapshot["state"] == "ready"
+    assert snapshot["document_revisions"] == {}
+    assert _snapshot_chunks(api, kb["kb_id"], empty_version) == []
+    assert api.post(
+        f"/v1/versions/{empty_version}/publish",
+        json={"expected_active_version_id": initial},
+    ).status_code == 200
+    assert api.get(f"/v1/kbs/{kb['kb_id']}").json()["active_version_id"] == empty_version
+
+
+def test_deleting_the_only_document_publishes_an_empty_snapshot(api: TestClient) -> None:
+    kb = _create_kb(api)
+    receipt = _document(api, kb["kb_id"], "single", "only document")
+    initial = receipt["version_id"]
+    assert api.post(
+        f"/v1/versions/{initial}/publish", json={"expected_active_version_id": None}
+    ).status_code == 200
+    document_id = receipt["document_id"]
+    latest = api.get(f"/v1/documents/{document_id}").json()
+    deleted = api.delete(
+        f"/v1/documents/{document_id}",
+        params={"expected_revision_id": latest["revision"]["revision_id"]},
+    )
+    assert deleted.status_code == 200, deleted.text
+    version = deleted.json()["version_id"]
+    assert version and version != initial
+    assert api.get(f"/v1/versions/{version}").json()["document_revisions"] == {}
+    assert _snapshot_chunks(api, kb["kb_id"], version) == []
+    assert api.post(
+        f"/v1/versions/{version}/publish",
+        json={"expected_active_version_id": initial},
+    ).status_code == 200
 
 
 def test_deleted_qa_pair_leaves_the_next_snapshot(api: TestClient) -> None:

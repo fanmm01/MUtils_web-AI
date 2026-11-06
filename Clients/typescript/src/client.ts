@@ -283,7 +283,22 @@ export function createClient(options: ClientOptions): Client {
   const doFetch = options.fetch ?? globalThis.fetch?.bind(globalThis);
   if (!doFetch) throw new Error("no fetch implementation is available");
   const baseUrl = options.baseUrl.replace(/\/+$/, "");
+  const configuredBase = new URL(baseUrl);
+  if (configuredBase.username || configuredBase.password || configuredBase.search || configuredBase.hash) {
+    throw new Error("API base URL must not contain credentials, a query or a fragment");
+  }
   const timeoutMs = options.timeoutMs ?? 30_000;
+
+  function apiUrl(path: string): URL {
+    if (!path.startsWith("/") || path.startsWith("//") || path.includes("\\")) {
+      throw new Error("API path must start with one forward slash");
+    }
+    const url = new URL(baseUrl + path);
+    if (url.origin !== configuredBase.origin) {
+      throw new Error("API path must stay on the configured origin");
+    }
+    return url;
+  }
 
   async function authHeaders(signal?: AbortSignal): Promise<Record<string, string>> {
     signal?.throwIfAborted();
@@ -294,7 +309,7 @@ export function createClient(options: ClientOptions): Client {
 
   async function request<T>(method: string, path: string, init: RawRequestInit = {}): Promise<T> {
     const { options: reqOptions = {}, body, rawBody } = init;
-    const url = new URL(baseUrl + path);
+    const url = apiUrl(path);
     for (const [key, value] of Object.entries(reqOptions.query ?? {})) {
       if (value !== undefined && value !== null) url.searchParams.set(key, String(value));
     }
@@ -354,6 +369,7 @@ export function createClient(options: ClientOptions): Client {
     path: string,
     init: { signal?: AbortSignal; headers?: Record<string, string> } = {},
   ): Promise<Response> {
+    const url = apiUrl(path);
     init.signal?.throwIfAborted();
     const headers = {
       Accept: "text/event-stream",
@@ -361,7 +377,7 @@ export function createClient(options: ClientOptions): Client {
       ...(init.headers ?? {}),
     };
     init.signal?.throwIfAborted();
-    const response = await doFetch(baseUrl + path, {
+    const response = await doFetch(url.toString(), {
       method: "GET",
       headers,
       signal: init.signal,
